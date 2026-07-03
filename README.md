@@ -463,6 +463,6 @@ MIT License - See LICENSE file for details.
 
 ## Author
 
-Built by Diamond Belema for the Bolt Hackathon.
+Built by Diamond Belema and David Briggs for the Dev career nomba hackathon.
 
 OffiMesh - Extending digital payments to the offline world.
