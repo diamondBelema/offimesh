@@ -31,13 +31,17 @@ class NombaVirtualAccountsClient:
         self._http_client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=30.0,
-            )
-        return self._http_client
+    """Get or create HTTP client."""
+    if self._http_client is None:
+        self._http_client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+            ),
+        )
+    return self._http_client
 
     async def _get_headers(self) -> dict[str, str]:
         """Get headers with valid access token."""
