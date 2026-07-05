@@ -1,0 +1,78 @@
+# Render deployment configuration for OffiMesh
+# Uses free tier with Celery-as-web-service workaround
+#
+# IMPORTANT: Render free tier doesn't support native worker services.
+# The Celery worker and beat scheduler are deployed as "web" services
+# that start a dummy HTTP server on $PORT (to satisfy Render's health checks)
+# and then run Celery in the background.
+#
+# The `python -m http.server $PORT &` trick allows us to use free tier
+# without paying for a proper worker plan.
+
+services:
+  # Main FastAPI application
+  - type: web
+    name: offimesh-api
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: REDIS_URL
+        fromKeyValue:
+          name: celery-broker
+          property: internalConnectionString
+      # Environment variables that must be set manually in Render dashboard:
+      # - DATABASE_URL (PostgreSQL connection string)
+      # - NOMBA_BASE_URL
+      # - NOMBA_ACCOUNT_ID
+      # - NOMBA_CLIENT_ID
+      # - NOMBA_CLIENT_SECRET
+      # - SUPABASE_URL
+      # - SUPABASE_ANON_KEY
+      # - SUPABASE_SERVICE_ROLE_KEY
+      # - SUPABASE_JWT_SECRET
+      # - JWT_SECRET_KEY (for internal JWT signing)
+      # - ENCRYPTION_KEY
+
+  # Celery worker (as web service with HTTP server workaround)
+  - type: web
+    name: offimesh-celery-worker
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    # Start dummy HTTP server for Render health checks, then Celery worker
+    startCommand: python -m http.server $PORT & celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: REDIS_URL
+        fromKeyValue:
+          name: celery-broker
+          property: internalConnectionString
+
+  # Celery Beat scheduler (as web service with HTTP server workaround)
+  - type: web
+    name: offimesh-celery-beat
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    # Start dummy HTTP server for Render health checks, then Celery beat
+    startCommand: python -m http.server $PORT & celery -A app.workers.celery_app beat --loglevel=info
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: REDIS_URL
+        fromKeyValue:
+          name: celery-broker
+          property: internalConnectionString
+
+# Redis Key-Value store for Celery broker
+keyValues:
+  - name: celery-broker
+    plan: free

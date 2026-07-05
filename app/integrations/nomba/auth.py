@@ -1,10 +1,17 @@
-"""Nomba authentication client with Redis caching."""
+"""Nomba authentication client with Redis caching.
+
+Handles OAuth client_credentials flow for obtaining and refreshing
+access tokens. Tokens are cached in Redis with a 55-minute TTL
+to ensure refresh before the 1-hour expiry.
+
+Note: This client does NOT inherit from BaseNombaClient because
+authentication requests use different headers (no Bearer token yet).
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import structlog
 
 import httpx
-import structlog
 
 from app.core.config import settings
 from app.core.exceptions import NombaAuthError
@@ -21,29 +28,52 @@ class NombaAuthClient:
     Tokens are cached in Redis with 55-minute TTL to ensure
     refresh before expiry. All other Nomba clients depend on
     this for their Bearer token.
+
+    This client maintains its own HTTP client because auth requests
+    don't include Bearer tokens and have different requirements.
     """
 
+    _instance: NombaAuthClient | None = None
+    _client: httpx.AsyncClient | None = None
+
+    def __new__(cls) -> NombaAuthClient:
+        """Singleton pattern for auth client."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self) -> None:
-        self.base_url = settings.nomba_base_url
-        self.account_id = settings.nomba_account_id
-        self.client_id = settings.nomba_client_id
-        self.client_secret = settings.nomba_client_secret
-        self._http_client: httpx.AsyncClient | None = None
+        # Only initialize once
+        if not hasattr(self, "_initialized"):
+            self.base_url = settings.nomba_base_url
+            self.account_id = settings.nomba_account_id
+            self.client_id = settings.nomba_client_id
+            self.client_secret = settings.nomba_client_secret
+            self._initialized = True
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
+        """Get or lazily create HTTP client."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
                 base_url=self.base_url,
-                timeout=30.0,
+                timeout=httpx.Timeout(
+                    connect=5.0,
+                    read=10.0,
+                    write=10.0,
+                    pool=5.0,
+                ),
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                ),
             )
-        return self._http_client
+        return self._client
 
     async def close(self) -> None:
         """Close HTTP client."""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def get_access_token(self) -> str:
         """
@@ -51,6 +81,12 @@ class NombaAuthClient:
 
         The token is cached for 55 minutes (safe margin from 1-hour expiry).
         Returns the access token string.
+
+        Returns:
+            str: The Bearer access token
+
+        Raises:
+            NombaAuthError: If authentication fails
         """
         # Try to get cached token first
         cached_token = await get_cached_nomba_token()
@@ -68,11 +104,18 @@ class NombaAuthClient:
         POST /auth/token/issue
         Headers: Content-Type, accountId
         Body: grant_type, client_id, client_secret
+
+        Returns:
+            str: The access token
+
+        Raises:
+            NombaAuthError: If request fails or token is invalid
         """
         client = await self._get_client()
 
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "accountId": self.account_id,
         }
 
@@ -83,6 +126,11 @@ class NombaAuthClient:
         }
 
         try:
+            logger.debug(
+                "nomba_auth_request_started",
+                # Never log client_id or client_secret
+            )
+
             response = await client.post(
                 "/auth/token/issue",
                 headers=headers,
@@ -93,10 +141,10 @@ class NombaAuthClient:
                 logger.error(
                     "nomba_auth_failed",
                     status=response.status_code,
-                    body=response.text[:500],
+                    # Don't log response body which may contain errors
                 )
                 raise NombaAuthError(
-                    f"Nomba auth failed: {response.status_code} - {response.text[:200]}"
+                    f"Nomba authentication failed (HTTP {response.status_code})"
                 )
 
             data = response.json()
@@ -107,7 +155,7 @@ class NombaAuthClient:
             else:
                 auth_data = data
 
-            auth_response = NombaAuthResponse(**auth_data)
+            auth_response = NombaAuthResponse.model_validate(auth_data)
 
             # Cache the token with safe TTL (55 minutes)
             await cache_nomba_token(auth_response.access_token, auth_response.expires_in)
@@ -115,9 +163,18 @@ class NombaAuthClient:
             logger.info(
                 "nomba_auth_success",
                 expires_in=auth_response.expires_in,
+                token_type=auth_response.token_type,
             )
 
             return auth_response.access_token
+
+        except httpx.TimeoutException as e:
+            logger.error("nomba_auth_timeout", error=str(e))
+            raise NombaAuthError("Nomba auth request timed out") from e
+
+        except httpx.ConnectError as e:
+            logger.error("nomba_auth_connection_error", error=str(e))
+            raise NombaAuthError("Failed to connect to Nomba API") from e
 
         except httpx.HTTPError as e:
             logger.error("nomba_auth_http_error", error=str(e))
@@ -127,22 +184,20 @@ class NombaAuthClient:
         """
         Force refresh the access token.
 
-        POST /auth/token/refresh
+        Invalidates the cached token and fetches a fresh one.
+
+        Returns:
+            str: The new access token
         """
         # Invalidate cached token first
         await invalidate_nomba_token()
 
         # Fetch fresh token
+        logger.info("nomba_auth_forcing_refresh")
         return await self._fetch_new_token()
 
 
-# Singleton instance
-_nomba_auth_client: NombaAuthClient | None = None
-
-
+# Singleton accessor
 def get_nomba_auth_client() -> NombaAuthClient:
     """Get the Nomba auth client singleton."""
-    global _nomba_auth_client
-    if _nomba_auth_client is None:
-        _nomba_auth_client = NombaAuthClient()
-    return _nomba_auth_client
+    return NombaAuthClient()

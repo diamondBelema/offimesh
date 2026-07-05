@@ -1,80 +1,115 @@
-"""Nomba transactions API client for reconciliation."""
+"""Nomba transactions API client for transaction queries and reconciliation.
+
+Used for:
+- Querying transactions by reference or ID
+- Listing transactions for reconciliation
+- Fetching transaction details for settlement verification
+
+Refactored to inherit from NombaResourceClient for production-grade reliability.
+"""
 from __future__ import annotations
 
 import structlog
-from datetime import date, datetime
+from datetime import date
 
-import httpx
-
-from app.core.config import settings
-from app.core.exceptions import NombaError
-from app.integrations.nomba.auth import get_nomba_auth_client
-from app.integrations.nomba.types import NombaTransactionResponse
+from app.integrations.nomba.base_client import NombaResourceClient
+from app.integrations.nomba.types import NombaTransactionResponse, NombaTransactionListResponse
 
 logger = structlog.get_logger(__name__)
 
 
-class NombaTransactionsClient:
+class NombaTransactionsClient(NombaResourceClient):
     """
     Client for Nomba transactions API.
 
-    Used for nightly reconciliation - diffing our ledger against Nomba's records.
+    Used for reconciliation - comparing Nomba's view of transactions
+    with our local ledger to catch discrepancies.
     """
 
-    def __init__(self) -> None:
-        self.base_url = settings.nomba_base_url
-        self.account_id = settings.nomba_account_id
-        self._http_client: httpx.AsyncClient | None = None
+    async def get_transaction(
+        self,
+        transaction_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> NombaTransactionResponse:
+        """
+        Get a transaction by Nomba's transaction ID.
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=60.0,  # Longer timeout for bulk fetches
+        GET /transactions/{transactionId}
+
+        Args:
+            transaction_id: Nomba's transaction ID
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaTransactionResponse with transaction details
+        """
+        response = await self._get(
+            f"/transactions/{transaction_id}",
+            request_id=request_id,
+        )
+
+        return self._parse_response(response, NombaTransactionResponse)
+
+    async def get_transaction_by_reference(
+        self,
+        reference: str,
+        *,
+        request_id: str | None = None,
+    ) -> NombaTransactionResponse | None:
+        """
+        Get a transaction by our reference (merchantTxRef).
+
+        GET /transactions/{reference}
+
+        Args:
+            reference: Our unique reference (merchantTxRef)
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaTransactionResponse or None if not found
+        """
+        try:
+            response = await self._get(
+                f"/transactions/{reference}",
+                request_id=request_id,
             )
-        return self._http_client
-
-    async def _get_headers(self) -> dict[str, str]:
-        """Get headers with valid access token."""
-        auth_client = get_nomba_auth_client()
-        token = await auth_client.get_access_token()
-        return {
-            "Authorization": f"Bearer {token}",
-            "accountId": self.account_id,
-            "Content-Type": "application/json",
-        }
-
-    async def close(self) -> None:
-        """Close HTTP client."""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None
+            return self._parse_response(response, NombaTransactionResponse)
+        except Exception:
+            return None
 
     async def list_transactions(
         self,
+        page: int = 1,
+        page_size: int = 100,
         date_from: date | None = None,
         date_to: date | None = None,
         status: str | None = None,
         tx_type: str | None = None,
-        page: int = 1,
-        page_size: int = 100,
-    ) -> tuple[list[NombaTransactionResponse], int]:
+        *,
+        request_id: str | None = None,
+    ) -> NombaTransactionListResponse:
         """
-        List transactions with filters.
+        List transactions with optional date filtering.
 
-        GET /transactions?dateFrom=&dateTo=&status=&type=&page=&pageSize=
+        GET /transactions
 
-        Used for reconciliation - pull all transactions for a date range
-        and diff against our ledger by merchantTxRef.
+        Used for nightly reconciliation to compare Nomba transactions
+        against our local ledger.
+
+        Args:
+            page: Page number (1-indexed)
+            page_size: Number of results per page (max 100)
+            date_from: Start date filter
+            date_to: End date filter
+            status: Filter by transaction status
+            tx_type: Filter by transaction type
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaTransactionListResponse with paginated results
         """
-        client = await self._get_client()
-        headers = await self._get_headers()
-
-        params: dict[str, str | int] = {
-            "page": page,
-            "pageSize": page_size,
-        }
+        params: dict = {"page": page, "pageSize": min(page_size, 100)}
 
         if date_from:
             params["dateFrom"] = date_from.isoformat()
@@ -85,70 +120,98 @@ class NombaTransactionsClient:
         if tx_type:
             params["type"] = tx_type
 
-        try:
-            response = await client.get(
-                "/transactions",
-                headers=headers,
-                params=params,
+        response = await self._get(
+            "/transactions",
+            params=params,
+            request_id=request_id,
+        )
+
+        data = response.json()
+
+        # Handle wrapped response
+        if isinstance(data, dict) and "data" in data:
+            inner = data["data"]
+            if isinstance(inner, dict) and "transactions" in inner:
+                transactions = [
+                    NombaTransactionResponse.model_validate(item)
+                    for item in inner.get("transactions", [])
+                ]
+                return NombaTransactionListResponse(
+                    transactions=transactions,
+                    total=inner.get("total"),
+                    page=inner.get("page", page),
+                    page_size=inner.get("pageSize", page_size),
+                )
+            elif isinstance(inner, list):
+                transactions = [NombaTransactionResponse.model_validate(item) for item in inner]
+                return NombaTransactionListResponse(transactions=transactions)
+
+        # Handle non-wrapped response
+        if isinstance(data, dict) and "transactions" in data:
+            transactions = [NombaTransactionResponse.model_validate(item) for item in data["transactions"]]
+            return NombaTransactionListResponse(
+                transactions=transactions,
+                total=data.get("total"),
+                page=data.get("page", page),
+                page_size=data.get("pageSize", page_size),
             )
 
-            if response.status_code != 200:
-                raise NombaError(
-                    f"Failed to list transactions: {response.status_code}"
-                )
+        if isinstance(data, list):
+            transactions = [NombaTransactionResponse.model_validate(item) for item in data]
+            return NombaTransactionListResponse(transactions=transactions)
 
-            data = response.json()
+        return NombaTransactionListResponse(transactions=[])
 
-            if "data" in data:
-                transactions_data = data["data"].get("transactions", [])
-                total = data["data"].get("total", 0)
-            else:
-                transactions_data = data.get("transactions", [])
-                total = data.get("total", 0)
-
-            transactions = [
-                NombaTransactionResponse(**tx) for tx in transactions_data
-            ]
-
-            return transactions, total
-
-        except httpx.HTTPError as e:
-            raise NombaError(f"HTTP error: {e}") from e
-
-    async def get_transaction(self, merchant_tx_ref: str) -> NombaTransactionResponse | None:
+    async def list_all_transactions_for_period(
+        self,
+        date_from: date,
+        date_to: date,
+        *,
+        request_id: str | None = None,
+    ) -> list[NombaTransactionResponse]:
         """
-        Get a single transaction by our reference.
+        Fetch all transactions for a date range, handling pagination.
 
-        GET /transactions/{merchantTxRef}
+        Convenience method that handles pagination automatically.
+
+        Args:
+            date_from: Start date
+            date_to: End date
+            request_id: Optional request ID for tracing
+
+        Returns:
+            List of all transactions in the period
         """
-        client = await self._get_client()
-        headers = await self._get_headers()
+        all_transactions: list[NombaTransactionResponse] = []
+        page = 1
+        page_size = 100
 
-        try:
-            response = await client.get(
-                f"/transactions/{merchant_tx_ref}",
-                headers=headers,
+        while True:
+            result = await self.list_transactions(
+                page=page,
+                page_size=page_size,
+                date_from=date_from,
+                date_to=date_to,
+                request_id=request_id,
             )
 
-            if response.status_code == 404:
-                return None
+            all_transactions.extend(result.transactions)
 
-            if response.status_code != 200:
-                raise NombaError(
-                    f"Failed to get transaction: {response.status_code}"
-                )
+            # Check if we need to fetch more pages
+            if result.total is None or len(all_transactions) >= result.total:
+                break
 
-            data = response.json()
+            page += 1
 
-            if "data" in data:
-                tx_data = data["data"]
-            else:
-                tx_data = data
+        logger.info(
+            "nomba_transactions_fetched",
+            request_id=request_id,
+            date_from=date_from.isoformat(),
+            date_to=date_to.isoformat(),
+            total=len(all_transactions),
+        )
 
-            return NombaTransactionResponse(**tx_data)
-
-        except httpx.HTTPError as e:
-            raise NombaError(f"HTTP error: {e}") from e
+        return all_transactions
 
 
 # Singleton instance

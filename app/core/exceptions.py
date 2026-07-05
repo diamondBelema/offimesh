@@ -253,36 +253,102 @@ class NombaError(OffiMeshError):
         code: str = "NOMBA_ERROR",
         status_code: int = 502,
         details: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> None:
         super().__init__(message, code, status_code, details=details)
+        self.request_id = request_id
 
 
 class NombaAuthError(NombaError):
     """Raised when Nomba authentication fails."""
 
-    def __init__(self, detail: str = "Nomba authentication failed") -> None:
-        super().__init__(detail, code="NOMBA_AUTH_ERROR", status_code=502)
+    def __init__(self, detail: str = "Nomba authentication failed", request_id: str | None = None) -> None:
+        super().__init__(detail, code="NOMBA_AUTH_ERROR", status_code=502, request_id=request_id)
 
 
-class NombaTransferError(NombaError):
-    """Raised when Nomba transfer fails."""
+class NombaValidationError(NombaError):
+    """Raised when Nomba rejects the request payload."""
 
-    def __init__(self, detail: str, nomba_code: str | None = None) -> None:
+    def __init__(self, detail: str, field: str | None = None, request_id: str | None = None) -> None:
         super().__init__(
             detail,
-            code="NOMBA_TRANSFER_ERROR",
-            details={"nomba_code": nomba_code} if nomba_code else None,
+            code="NOMBA_VALIDATION_ERROR",
+            status_code=400,
+            details={"field": field} if field else None,
+            request_id=request_id,
         )
+
+
+class NombaNotFoundError(NombaError):
+    """Raised when Nomba resource is not found."""
+
+    def __init__(self, resource: str = "Resource", resource_id: str | None = None, request_id: str | None = None) -> None:
+        message = f"{resource} not found"
+        if resource_id:
+            message = f"{resource} with id '{resource_id}' not found"
+        super().__init__(message, code="NOMBA_NOT_FOUND", status_code=404, request_id=request_id)
+
+
+class NombaConflictError(NombaError):
+    """Raised when there's a conflict (e.g., duplicate reference)."""
+
+    def __init__(self, detail: str, request_id: str | None = None) -> None:
+        super().__init__(detail, code="NOMBA_CONFLICT", status_code=409, request_id=request_id)
 
 
 class NombaRateLimitError(NombaError):
     """Raised when Nomba rate limits our requests."""
 
-    def __init__(self) -> None:
+    def __init__(self, retry_after: int | None = None, request_id: str | None = None) -> None:
         super().__init__(
             "Nomba API rate limit exceeded",
             code="NOMBA_RATE_LIMITED",
             status_code=429,
+            details={"retry_after": retry_after} if retry_after else None,
+            request_id=request_id,
+        )
+
+
+class NombaServerError(NombaError):
+    """Raised when Nomba returns a 5xx error."""
+
+    def __init__(self, status_code: int = 500, request_id: str | None = None) -> None:
+        super().__init__(
+            f"Nomba server error (HTTP {status_code})",
+            code="NOMBA_SERVER_ERROR",
+            status_code=502,
+            request_id=request_id,
+        )
+
+
+class NombaServiceUnavailableError(NombaError):
+    """Raised when Nomba service is unavailable (circuit breaker, timeout, etc.)."""
+
+    def __init__(self, detail: str = "Nomba service temporarily unavailable", request_id: str | None = None) -> None:
+        super().__init__(detail, code="NOMBA_SERVICE_UNAVAILABLE", status_code=503, request_id=request_id)
+
+
+class NombaTimeoutError(NombaError):
+    """Raised when Nomba request times out."""
+
+    def __init__(self, timeout_seconds: float, request_id: str | None = None) -> None:
+        super().__init__(
+            f"Nomba request timed out after {timeout_seconds}s",
+            code="NOMBA_TIMEOUT",
+            status_code=504,
+            request_id=request_id,
+        )
+
+
+class NombaTransferError(NombaError):
+    """Raised when Nomba transfer fails."""
+
+    def __init__(self, detail: str, nomba_code: str | None = None, request_id: str | None = None) -> None:
+        super().__init__(
+            detail,
+            code="NOMBA_TRANSFER_ERROR",
+            details={"nomba_code": nomba_code} if nomba_code else None,
+            request_id=request_id,
         )
 
 

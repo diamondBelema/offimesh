@@ -1,170 +1,80 @@
-"""Nomba transfers API client for settlements."""
+"""Nomba transfers API client for bank transfers and settlements.
+
+Refactored to inherit from NombaResourceClient, providing:
+- Bank account lookup (required before transfer)
+- Bank transfer initiation
+- Transfer status queries
+- Production-grade error handling and retries
+"""
 from __future__ import annotations
 
 import structlog
 
-import httpx
-
-from app.core.config import settings
-from app.core.exceptions import NombaError, NombaRateLimitError, NombaTransferError
-from app.integrations.nomba.auth import get_nomba_auth_client
-from app.integrations.nomba.types import NombaTransferResponse, NombiTransferLookupResponse
+from app.integrations.nomba.base_client import NombaResourceClient
+from app.integrations.nomba.types import NombaTransferResponse, NombaBankLookupResponse
 
 logger = structlog.get_logger(__name__)
 
 
-class CircuitBreaker:
-    """
-    Circuit breaker for Nomba API calls.
-
-    Opens after 5 failures in 60 seconds, resets after 30 seconds.
-    """
-
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        reset_timeout_seconds: int = 30,
-        window_seconds: int = 60,
-    ) -> None:
-        self.failure_threshold = failure_threshold
-        self.reset_timeout_seconds = reset_timeout_seconds
-        self.window_seconds = window_seconds
-        self.failures: list[float] = []
-        self.last_failure_time: float | None = None
-        self.state: str = "closed"  # closed, open, half-open
-
-    def record_failure(self) -> None:
-        """Record a failure and check if circuit should open."""
-        import time
-        now = time.time()
-
-        # Remove old failures outside window
-        self.failures = [f for f in self.failures if now - f < self.window_seconds]
-
-        # Add new failure
-        self.failures.append(now)
-        self.last_failure_time = now
-
-        # Check if threshold exceeded
-        if len(self.failures) >= self.failure_threshold:
-            self.state = "open"
-            logger.warning("nomba_circuit_opened", failure_count=len(self.failures))
-
-    def record_success(self) -> None:
-        """Record a success and reset circuit."""
-        self.failures = []
-        self.state = "closed"
-
-    def can_execute(self) -> bool:
-        """Check if request can proceed."""
-        import time
-
-        if self.state == "closed":
-            return True
-
-        if self.state == "open":
-            # Check if we should try half-open
-            if self.last_failure_time:
-                elapsed = time.time() - self.last_failure_time
-                if elapsed >= self.reset_timeout_seconds:
-                    self.state = "half-open"
-                    logger.info("nomba_circuit_half_open")
-                    return True
-            return False
-
-        # half-open - allow one test request
-        return True
-
-
-class NombaTransfersClient:
+class NombaTransfersClient(NombaResourceClient):
     """
     Client for Nomba transfers API.
 
     Used for settlements - transferring funds to merchant bank accounts.
+
+    IMPORTANT: Always call lookup_bank_account() before initiate_bank_transfer()
+    to verify the account details. This is mandatory per Nomba's documentation.
     """
-
-    def __init__(self) -> None:
-        self.base_url = settings.nomba_base_url
-        self.account_id = settings.nomba_account_id
-        self._http_client: httpx.AsyncClient | None = None
-        self.circuit_breaker = CircuitBreaker()
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=30.0,
-            )
-        return self._http_client
-
-    async def _get_headers(self) -> dict[str, str]:
-        """Get headers with valid access token."""
-        auth_client = get_nomba_auth_client()
-        token = await auth_client.get_access_token()
-        return {
-            "Authorization": f"Bearer {token}",
-            "accountId": self.account_id,
-            "Content-Type": "application/json",
-        }
-
-    async def close(self) -> None:
-        """Close HTTP client."""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None
 
     async def lookup_bank_account(
         self,
         bank_code: str,
         account_number: str,
-    ) -> NombiTransferLookupResponse:
+        *,
+        request_id: str | None = None,
+    ) -> NombaBankLookupResponse:
         """
-        Resolve bank account to name BEFORE transfer.
+        Resolve bank account to account name BEFORE transfer.
 
         POST /transfers/bank/lookup
         Body: bankCode, accountNumber
 
-        MUST always be called before /transfers/bank.
+        This is MANDATORY before initiating any transfer.
+
+        Args:
+            bank_code: Nigerian bank code (e.g., "044" for Access Bank)
+            account_number: 10-digit NUBAN account number
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaBankLookupResponse with account_name, bank_name, etc.
+
+        Raises:
+            NombaNotFoundError: If account cannot be resolved
+            NombaValidationError: If bank_code or account_number invalid
         """
-        if not self.circuit_breaker.can_execute():
-            raise NombaError("Circuit breaker open")
-
-        client = await self._get_client()
-        headers = await self._get_headers()
-
         body = {
             "bankCode": bank_code,
             "accountNumber": account_number,
         }
 
-        try:
-            response = await client.post(
-                "/transfers/bank/lookup",
-                headers=headers,
-                json=body,
-            )
+        response = await self._post(
+            "/transfers/bank/lookup",
+            body,
+            is_idempotent=True,  # Lookup is safe to retry
+            request_id=request_id,
+        )
 
-            if response.status_code != 200:
-                self.circuit_breaker.record_failure()
-                raise NombaTransferError(
-                    f"Bank lookup failed: {response.status_code}",
-                )
+        result = self._parse_response(response, NombaBankLookupResponse)
 
-            data = response.json()
+        logger.info(
+            "nomba_bank_lookup_completed",
+            request_id=request_id,
+            bank_code=bank_code,
+            account_name=result.account_name,
+        )
 
-            if "data" in data:
-                lookup_data = data["data"]
-            else:
-                lookup_data = data
-
-            self.circuit_breaker.record_success()
-
-            return NombiTransferLookupResponse(**lookup_data)
-
-        except httpx.HTTPError as e:
-            self.circuit_breaker.record_failure()
-            raise NombaTransferError(f"HTTP error: {e}") from e
+        return result
 
     async def initiate_bank_transfer(
         self,
@@ -175,21 +85,36 @@ class NombaTransfersClient:
         narration: str,
         merchant_tx_ref: str,
         sender_name: str = "OffiMesh",
+        *,
+        request_id: str | None = None,
     ) -> NombaTransferResponse:
         """
-        Initiate bank transfer for settlement.
+        Initiate a bank transfer for settlement.
 
         POST /transfers/bank
         Body: amount, bankCode, accountNumber, accountName, senderName, narration, merchantTxRef
 
-        merchantTxRef is our unique idempotency key.
+        The merchantTxRef is used as a unique idempotency key. If the same
+        reference is used again, Nomba will return the original transfer.
+
+        Args:
+            amount_kobo: Amount in kobo (1/100 of Naira)
+            bank_code: Nigerian bank code
+            account_number: 10-digit NUBAN
+            account_name: Verified account name from lookup
+            narration: Transfer description
+            merchant_tx_ref: Unique reference (our tx_id)
+            sender_name: Name shown to recipient
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaTransferResponse with transfer details
+
+        Raises:
+            NombaValidationError: If parameters invalid
+            NombaConflictError: If duplicate reference
+            NombaTransferError: If transfer fails
         """
-        if not self.circuit_breaker.can_execute():
-            raise NombaError("Circuit breaker open")
-
-        client = await self._get_client()
-        headers = await self._get_headers()
-
         body = {
             "amount": amount_kobo,
             "bankCode": bank_code,
@@ -200,88 +125,74 @@ class NombaTransfersClient:
             "merchantTxRef": merchant_tx_ref,
         }
 
-        try:
-            response = await client.post(
-                "/transfers/bank",
-                headers=headers,
-                json=body,
-            )
+        response = await self._post(
+            "/transfers/bank",
+            body,
+            is_idempotent=True,  # merchantTxRef provides idempotency
+            request_id=request_id,
+        )
 
-            if response.status_code == 429:
-                self.circuit_breaker.record_failure()
-                raise NombaRateLimitError()
+        result = self._parse_response(response, NombaTransferResponse)
 
-            if response.status_code not in (200, 201):
-                self.circuit_breaker.record_failure()
-                error_body = response.text[:500]
-                logger.error(
-                    "nomba_transfer_failed",
-                    status=response.status_code,
-                    body=error_body,
-                )
-                raise NombaTransferError(
-                    f"Transfer failed: {response.status_code}",
-                )
+        logger.info(
+            "nomba_transfer_initiated",
+            request_id=request_id,
+            merchant_tx_ref=merchant_tx_ref,
+            amount_kobo=amount_kobo,
+            transfer_id=result.transfer_id,
+        )
 
-            data = response.json()
+        return result
 
-            if "data" in data:
-                transfer_data = data["data"]
-            else:
-                transfer_data = data
-
-            self.circuit_breaker.record_success()
-
-            logger.info(
-                "nomba_transfer_initiated",
-                merchant_tx_ref=merchant_tx_ref,
-                amount=amount_kobo,
-            )
-
-            return NombaTransferResponse(**transfer_data)
-
-        except NombaRateLimitError:
-            raise
-        except NombaTransferError:
-            raise
-        except httpx.HTTPError as e:
-            self.circuit_breaker.record_failure()
-            raise NombaTransferError(f"HTTP error: {e}") from e
-
-    async def get_transfer_status(self, merchant_tx_ref: str) -> NombaTransferResponse:
+    async def get_transfer_status(
+        self,
+        merchant_tx_ref: str,
+        *,
+        request_id: str | None = None,
+    ) -> NombaTransferResponse:
         """
-        Check transfer status using our reference.
+        Check the status of a transfer using our reference.
 
         GET /transfers/{merchantTxRef}
+
+        Args:
+            merchant_tx_ref: Our unique reference used in initiate
+            request_id: Optional request ID for tracing
+
+        Returns:
+            NombaTransferResponse with current status
         """
-        if not self.circuit_breaker.can_execute():
-            raise NombaError("Circuit breaker open")
+        response = await self._get(
+            f"/transfers/{merchant_tx_ref}",
+            request_id=request_id,
+        )
 
-        client = await self._get_client()
-        headers = await self._get_headers()
+        return self._parse_response(response, NombaTransferResponse)
 
-        try:
-            response = await client.get(
-                f"/transfers/{merchant_tx_ref}",
-                headers=headers,
-            )
+    async def get_transfer_by_id(
+        self,
+        transfer_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> NombaTransferResponse:
+        """
+        Get transfer by Nomba's transfer ID.
 
-            if response.status_code != 200:
-                raise NombaError(
-                    f"Failed to get transfer status: {response.status_code}"
-                )
+        GET /transfers/id/{transferId}
 
-            data = response.json()
+        Args:
+            transfer_id: Nomba's transfer ID from initiate_bank_transfer
+            request_id: Optional request ID for tracing
 
-            if "data" in data:
-                transfer_data = data["data"]
-            else:
-                transfer_data = data
+        Returns:
+            NombaTransferResponse with transfer details
+        """
+        response = await self._get(
+            f"/transfers/id/{transfer_id}",
+            request_id=request_id,
+        )
 
-            return NombaTransferResponse(**transfer_data)
-
-        except httpx.HTTPError as e:
-            raise NombaError(f"HTTP error: {e}") from e
+        return self._parse_response(response, NombaTransferResponse)
 
 
 # Singleton instance
