@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,6 +71,11 @@ class VirtualAccount(Base):
     status: Mapped[str] = mapped_column(
         String(20),
         default="pending",
+        nullable=False,
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
         nullable=False,
     )
     expires_at: Mapped[datetime | None] = mapped_column(

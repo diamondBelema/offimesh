@@ -28,6 +28,63 @@ class WalletService:
         self.virtual_account_repo = VirtualAccountRepository(db)
         self.audit_repo = AuditRepository(db)
 
+    async def create_user_virtual_account(
+        self,
+        user_id: str,
+        account_name: str,
+        correlation_id: str | None = None,
+    ) -> VirtualAccount:
+        """Create a permanent virtual NUBAN account for user wallet."""
+        user = await self.user_repo.get_by_id(uuid.UUID(user_id))
+        if not user:
+            raise NotFoundError("User not found")
+
+        # Check if user already has a primary virtual account
+        existing = await self.virtual_account_repo.get_primary_by_user(uuid.UUID(user_id))
+        if existing:
+            logger.info("virtual_account_exists", user_id=user_id)
+            return existing
+
+        account_ref = f"OFFIMESH_{user_id}"
+        
+        nomba_client = get_nomba_virtual_accounts_client()
+        nomba_account = await nomba_client.create_virtual_account(
+            account_ref=account_ref,
+            account_name=account_name,
+            amount=None,  # No expected amount - permanent account
+        )
+
+        virtual_account = VirtualAccount(
+            user_id=user.id,
+            nomba_account_id=nomba_account.account_id,
+            account_ref=account_ref,
+            nuban=nomba_account.account_number,
+            account_name=nomba_account.account_name,
+            bank_name=nomba_account.bank_name,
+            status="active",
+            is_primary=True,
+        )
+        await self.virtual_account_repo.create(virtual_account)
+
+        await self.user_repo.set_nomba_account(user.id, nomba_account.account_id)
+
+        await self.audit_repo.create(AuditLog(
+            actor_type="user",
+            actor_id=user_id,
+            action="wallet.virtual_account_created",
+            resource="virtual_account",
+            resource_id=str(virtual_account.id),
+            correlation_id=correlation_id,
+        ))
+
+        logger.info(
+            "virtual_account_created",
+            user_id=user_id,
+            nuban=nomba_account.account_number,
+        )
+
+        return virtual_account
+
     async def create_funding_account(
         self,
         user_id: str,

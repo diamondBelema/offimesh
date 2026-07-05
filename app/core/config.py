@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
 
     # SMS Gateway (for OTP)
+    sms_provider: str = Field(
+        default="mock",
+        description="SMS provider: 'termii', 'mock' for development",
+    )
     sms_gateway_url: str = ""
     sms_gateway_api_key: str = ""
     sms_gateway_sender_id: str = "OffiMesh"

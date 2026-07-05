@@ -33,6 +33,7 @@ from app.models.user import User
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.device_repository import DeviceRepository
 from app.repositories.user_repository import UserRepository
+from app.services.sms_service import get_sms_service
 
 logger = structlog.get_logger(__name__)
 
@@ -45,6 +46,26 @@ class AuthService:
         self.user_repo = UserRepository(db)
         self.device_repo = DeviceRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.sms_service = get_sms_service()
+
+    def _generate_dummy_name(self) -> str:
+        """Generate a dummy Nigerian name for unverified users."""
+        import random
+        first_names = [
+            "Adebayo", "Chidinma", "Emeka", "Fatima", "Gbenga",
+            "Halima", "Ibrahim", "Joyce", "Kemi", "Ladi",
+            "Musa", "Ngozi", "Oluwaseun", "Promise", "Queen",
+            "Rashidat", "Suleiman", "Tunde", "Uchechi", "Victor",
+        ]
+        last_names = [
+            "Adeyemi", "Bakare", "Chukwu", "Danjuma", "Eze",
+            "Fashola", "Garba", "Hassan", "Ibrahim", "Jibril",
+            "Kano", "Lawal", "Mohammed", "Nnamdi", "Okonkwo",
+            "Patience", "Quadir", "Rabi", "Sani", "Tukur",
+        ]
+        first = random.choice(first_names)
+        last = random.choice(last_names)
+        return f"{first} {last}"
 
     async def register(
         self,
@@ -53,41 +74,61 @@ class AuthService:
         role: str,
         correlation_id: str | None = None,
     ) -> dict:
-        """Register a new user."""
-        # Check if user already exists
+        """Register a new user with virtual account creation."""
         phone_hash, salt = hash_phone(phone)
         existing = await self.user_repo.get_by_phone_hash(phone_hash)
         if existing:
             raise ConflictError("User already registered", field="phone")
 
-        # Encrypt phone for support lookup
         phone_encrypted = encrypt_value(phone)
+        dummy_name = self._generate_dummy_name()
+        display_name = name if name else dummy_name
 
-        # Create user
         user = User(
             phone_hash=phone_hash,
             phone_salt=salt,
             phone_encrypted=phone_encrypted,
-            name=name,
+            name=display_name,
             role=role,
             trust_level="untrusted",
             status="pending_verification",
         )
         await self.user_repo.create(user)
 
-        # Generate and cache OTP
+        virtual_account_info = None
+        try:
+            from app.services.wallet_service import WalletService
+            wallet_service = WalletService(self.db)
+            virtual_account = await wallet_service.create_user_virtual_account(
+                user_id=str(user.id),
+                account_name=display_name,
+                correlation_id=correlation_id,
+            )
+            virtual_account_info = {
+                "nuban": virtual_account.nuban,
+                "bank_name": virtual_account.bank_name,
+                "account_name": virtual_account.account_name,
+            }
+        except Exception as e:
+            logger.error("virtual_account_creation_failed", user_id=str(user.id), error=str(e))
+
         otp = self._generate_otp()
         await cache_set(f"otp:{user.id}", otp, ttl_seconds=600)
 
-        logger.info("otp_generated", user_id=str(user.id), otp=otp)
+        try:
+            await self.sms_service.send_otp(phone, otp)
+        except Exception as e:
+            logger.warning("otp_sms_failed", user_id=str(user.id), error=str(e))
 
-        # Audit log
+        logger.info("user_registered", user_id=str(user.id), name_provided=bool(name))
+
         await self.audit_repo.create(AuditLog(
             actor_type="user",
             actor_id=str(user.id),
             action="user.registered",
             resource="user",
             resource_id=str(user.id),
+            metadata={"role": role, "has_name": bool(name)},
             correlation_id=correlation_id,
         ))
 
@@ -95,6 +136,7 @@ class AuthService:
             "user_id": str(user.id),
             "otp_sent": True,
             "message": "OTP sent to your phone",
+            "virtual_account": virtual_account_info,
         }
 
     def _generate_otp(self) -> str:
@@ -117,6 +159,7 @@ class AuthService:
 
         user_uuid = uuid.UUID(user_id)
         await self.user_repo.update_status(user_uuid, "active")
+        await cache_set(f"otp:{user_id}", "", ttl_seconds=1)
 
         await self.audit_repo.create(AuditLog(
             actor_type="user",
@@ -144,7 +187,12 @@ class AuthService:
         otp = self._generate_otp()
         await cache_set(f"otp:{user.id}", otp, ttl_seconds=600)
 
-        logger.info("login_otp_generated", user_id=str(user.id), otp=otp)
+        try:
+            await self.sms_service.send_otp(phone, otp)
+        except Exception as e:
+            logger.warning("otp_sms_failed", user_id=str(user.id), error=str(e))
+
+        logger.info("login_otp_sent", user_id=str(user.id))
 
         await self.audit_repo.create(AuditLog(
             actor_type="user",
@@ -174,6 +222,8 @@ class AuthService:
 
         if user.status != "active":
             raise AuthenticationError("Account not active")
+
+        await cache_set(f"otp:{user_id}", "", ttl_seconds=1)
 
         devices = await self.device_repo.get_active_by_user(user.id)
         device_id = devices[0].id if devices else None
@@ -278,18 +328,11 @@ class AuthService:
         pin: str,
         correlation_id: str | None = None,
     ) -> dict:
-        """
-        Verify transaction PIN.
+        """Verify transaction PIN with atomic rate limiting."""
+        from app.core.redis import get_pin_attempts, increment_pin_attempts, reset_pin_attempts
+        from app.core.security import verify_pin as verify_pin_hash
 
-        RATE LIMITED: 5 attempts per 15 minutes.
-        Tracks failed attempts to prevent brute force.
-        """
-        from app.core.redis import cache_get, cache_set
-
-        # Check rate limit (5 attempts per 15 minutes)
-        rate_key = f"pin_attempts:{user_id}"
-        attempts = await cache_get(rate_key)
-        attempt_count = int(attempts) if attempts else 0
+        attempt_count = await get_pin_attempts(user_id)
 
         if attempt_count >= 5:
             raise ValidationError(
@@ -298,12 +341,11 @@ class AuthService:
 
         user = await self.user_repo.get_by_id(uuid.UUID(user_id))
         if not user or not user.pin_hash:
-            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+            await increment_pin_attempts(user_id)
             raise AuthenticationError("PIN not set or user not found")
 
-        if verify_pin(pin, user.pin_hash):
-            # Reset attempts on success
-            await cache_set(rate_key, "0", ttl_seconds=900)
+        if verify_pin_hash(pin, user.pin_hash):
+            await reset_pin_attempts(user_id)
 
             await self.audit_repo.create(AuditLog(
                 actor_type="user",
@@ -316,8 +358,7 @@ class AuthService:
 
             return {"verified": True, "remaining_attempts": 5}
         else:
-            # Increment failed attempts
-            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+            new_count = await increment_pin_attempts(user_id)
 
             await self.audit_repo.create(AuditLog(
                 actor_type="user",
@@ -325,11 +366,11 @@ class AuthService:
                 action="user.pin_verify_failed",
                 resource="user",
                 resource_id=user_id,
-                metadata={"attempt": attempt_count + 1},
+                metadata={"attempt": new_count},
                 correlation_id=correlation_id,
             ))
 
-            remaining = 5 - (attempt_count + 1)
+            remaining = 5 - new_count
             if remaining <= 0:
                 raise ValidationError(
                     "Too many PIN attempts. Please try again in 15 minutes."

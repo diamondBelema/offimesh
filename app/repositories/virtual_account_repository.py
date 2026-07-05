@@ -62,6 +62,16 @@ class VirtualAccountRepository:
         )
         return list(result.scalars().all())
 
+    async def get_primary_by_user(self, user_id: uuid.UUID) -> VirtualAccount | None:
+        """Get user's primary virtual account."""
+        result = await self.db.execute(
+            select(VirtualAccount).where(
+                VirtualAccount.user_id == user_id,
+                VirtualAccount.is_primary == True,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def update_status(self, account_id: uuid.UUID, status: str) -> None:
         """Update virtual account status."""
         await self.db.execute(
