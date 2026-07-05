@@ -19,6 +19,7 @@ from app.routers import (
     auth_router,
     devices_router,
     health_router,
+    identity_router,
     settlements_router,
     tokens_router,
     transactions_router,
@@ -141,6 +142,7 @@ app.include_router(transactions_router)
 app.include_router(settlements_router)
 app.include_router(wallet_router)
 app.include_router(webhooks_router)
+app.include_router(identity_router)
 
 
 def run() -> None:

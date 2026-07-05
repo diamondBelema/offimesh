@@ -2,22 +2,38 @@
 from app.models.user import User
 from app.models.device import Device
 from app.models.token import OfflineToken
+from app.models.offline_token import OfflineToken as OfflineTokenV2
 from app.models.transaction import Transaction, TransactionEvent
 from app.models.settlement import Settlement
+from app.models.settlement_claim import SettlementClaim
 from app.models.virtual_account import VirtualAccount
 from app.models.webhook import WebhookEvent
 from app.models.audit import AuditLog
 from app.models.idempotency import IdempotencyKey
+from app.models.ledger_balance import LedgerBalance
+from app.models.ledger_entry import LedgerEntry
+from app.models.identity_verification import IdentityVerification
+from app.models.fraud_signal import FraudSignal
+from app.models.device_activity_log import DeviceActivityLog
+from app.models.blacklisted_device import BlacklistedDevice
 
 __all__ = [
     "User",
     "Device",
     "OfflineToken",
+    "OfflineTokenV2",
     "Transaction",
     "TransactionEvent",
     "Settlement",
+    "SettlementClaim",
     "VirtualAccount",
     "WebhookEvent",
     "AuditLog",
     "IdempotencyKey",
+    "LedgerBalance",
+    "LedgerEntry",
+    "IdentityVerification",
+    "FraudSignal",
+    "DeviceActivityLog",
+    "BlacklistedDevice",
 ]

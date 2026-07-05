@@ -69,6 +69,18 @@ from app.schemas.health import (
     HealthResponse,
     RootResponse,
 )
+from app.schemas.identity import (
+    CanProvisionTokenResponse,
+    DeviceTrustPayloadSchema,
+    FraudAssessmentResponse,
+    InitiateVerificationRequest,
+    InitiateVerificationResponse,
+    TrustEvaluationResponse,
+    VerificationDetail,
+    VerificationStatusResponse,
+    VerifyFaceRequest,
+    VerifyFaceResponse,
+)
 
 __all__ = [
     # Base
@@ -131,4 +143,15 @@ __all__ = [
     "HealthResponse",
     "DetailedHealthResponse",
     "RootResponse",
+    # Identity
+    "InitiateVerificationRequest",
+    "InitiateVerificationResponse",
+    "VerifyFaceRequest",
+    "VerifyFaceResponse",
+    "VerificationStatusResponse",
+    "VerificationDetail",
+    "CanProvisionTokenResponse",
+    "DeviceTrustPayloadSchema",
+    "TrustEvaluationResponse",
+    "FraudAssessmentResponse",
 ]

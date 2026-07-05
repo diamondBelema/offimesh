@@ -44,8 +44,20 @@ celery_app.conf.update(
     # Beat schedule for periodic tasks
     beat_schedule={
         "expire-tokens-every-hour": {
-            "task": "app.workers.reconciliation_worker.expire_tokens",
+            "task": "app.workers.token_expiry_worker.expire_tokens",
             "schedule": 3600.0,  # Every hour
+        },
+        "apply-spend-cutoffs": {
+            "task": "app.workers.token_cutoff_worker.apply_spend_cutoffs",
+            "schedule": 900.0,  # Every 15 minutes
+        },
+        "scan-for-blacklist-candidates": {
+            "task": "app.workers.blacklist_worker.scan_for_blacklist_candidates",
+            "schedule": 1800.0,  # Every 30 minutes
+        },
+        "recalculate-device-trust-scores": {
+            "task": "app.workers.device_trust_recalc_worker.recalculate_all_trust_scores",
+            "schedule": 86400.0,  # Every 24 hours
         },
         "reconciliation-nightly": {
             "task": "app.workers.reconciliation_worker.run_reconciliation",
@@ -64,4 +76,8 @@ celery_app.autodiscover_tasks([
     "app.workers.settlement_worker",
     "app.workers.webhook_worker",
     "app.workers.reconciliation_worker",
+    "app.workers.token_expiry_worker",
+    "app.workers.token_cutoff_worker",
+    "app.workers.blacklist_worker",
+    "app.workers.device_trust_recalc_worker",
 ])

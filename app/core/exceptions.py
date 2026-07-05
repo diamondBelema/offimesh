@@ -341,3 +341,26 @@ class DeviceRevokedError(PermissionDeniedError):
 
     def __init__(self) -> None:
         super().__init__("Device has been revoked")
+
+
+# --- Fraud Errors ---
+
+
+class FraudBlockError(TransactionError):
+    """Raised when fraud checkpoint blocks an action."""
+
+    def __init__(self, score: int, signals: list[str]) -> None:
+        super().__init__(
+            f"Transaction blocked due to fraud detection (score: {score})",
+            code="FRAUD_BLOCKED",
+            status_code=403,
+        )
+        self.fraud_score = score
+        self.signals_detected = signals
+
+
+class DeviceBlacklistedError(PermissionDeniedError):
+    """Raised when device is blacklisted."""
+
+    def __init__(self) -> None:
+        super().__init__("Device is blacklisted")

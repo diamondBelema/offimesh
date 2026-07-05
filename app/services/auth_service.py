@@ -272,12 +272,70 @@ class AuthService:
 
         return {"pin_set": True}
 
-    async def verify_pin(self, user_id: str, pin: str) -> bool:
-        """Verify transaction PIN."""
+    async def verify_pin(
+        self,
+        user_id: str,
+        pin: str,
+        correlation_id: str | None = None,
+    ) -> dict:
+        """
+        Verify transaction PIN.
+
+        RATE LIMITED: 5 attempts per 15 minutes.
+        Tracks failed attempts to prevent brute force.
+        """
+        from app.core.redis import cache_get, cache_set
+
+        # Check rate limit (5 attempts per 15 minutes)
+        rate_key = f"pin_attempts:{user_id}"
+        attempts = await cache_get(rate_key)
+        attempt_count = int(attempts) if attempts else 0
+
+        if attempt_count >= 5:
+            raise ValidationError(
+                "Too many PIN attempts. Please try again in 15 minutes."
+            )
+
         user = await self.user_repo.get_by_id(uuid.UUID(user_id))
         if not user or not user.pin_hash:
-            return False
-        return verify_pin(pin, user.pin_hash)
+            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+            raise AuthenticationError("PIN not set or user not found")
+
+        if verify_pin(pin, user.pin_hash):
+            # Reset attempts on success
+            await cache_set(rate_key, "0", ttl_seconds=900)
+
+            await self.audit_repo.create(AuditLog(
+                actor_type="user",
+                actor_id=user_id,
+                action="user.pin_verified",
+                resource="user",
+                resource_id=user_id,
+                correlation_id=correlation_id,
+            ))
+
+            return {"verified": True, "remaining_attempts": 5}
+        else:
+            # Increment failed attempts
+            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+
+            await self.audit_repo.create(AuditLog(
+                actor_type="user",
+                actor_id=user_id,
+                action="user.pin_verify_failed",
+                resource="user",
+                resource_id=user_id,
+                metadata={"attempt": attempt_count + 1},
+                correlation_id=correlation_id,
+            ))
+
+            remaining = 5 - (attempt_count + 1)
+            if remaining <= 0:
+                raise ValidationError(
+                    "Too many PIN attempts. Please try again in 15 minutes."
+                )
+
+            return {"verified": False, "remaining_attempts": remaining}
 
     async def get_user(self, user_id: str) -> User:
         """Get user by ID."""

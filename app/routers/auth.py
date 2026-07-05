@@ -120,3 +120,26 @@ async def create_pin(
         correlation_id=correlation_id,
     )
     return ok_response(result, correlation_id)
+
+
+@router.post("/pin/verify")
+async def verify_pin(
+    request: Request,
+    body: VerifyPINRequest,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    Verify transaction PIN.
+
+    RATE LIMITED: 5 attempts per 15 minutes.
+    Invalid attempts are tracked to prevent brute force.
+    """
+    correlation_id = get_correlation_id(request)
+    service = AuthService(db)
+    result = await service.verify_pin(
+        user_id=str(user.id),
+        pin=body.pin,
+        correlation_id=correlation_id,
+    )
+    return ok_response(result, correlation_id)

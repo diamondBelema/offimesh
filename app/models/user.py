@@ -56,10 +56,6 @@ class User(Base):
         nullable=True,
         unique=True,
     )
-    pin_hash: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-    )
     bvn: Mapped[str | None] = mapped_column(
         String(255),  # Encrypted
         nullable=True,
@@ -70,6 +66,22 @@ class User(Base):
     )
     bvn_verification_reference: Mapped[str | None] = mapped_column(
         String(128),
+        nullable=True,
+    )
+    nin_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+    nin_verification_reference: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    face_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+    pin_hash: Mapped[str | None] = mapped_column(
+        String(255),
         nullable=True,
     )
     role: Mapped[str] = mapped_column(

@@ -8,6 +8,7 @@ from app.routers.settlements import router as settlements_router
 from app.routers.wallet import router as wallet_router
 from app.routers.webhooks import router as webhooks_router
 from app.routers.health import router as health_router
+from app.routers.identity import router as identity_router
 
 __all__ = [
     "auth_router",
@@ -19,4 +20,5 @@ __all__ = [
     "wallet_router",
     "webhooks_router",
     "health_router",
+    "identity_router",
 ]
