@@ -1,32 +1,4 @@
-"""Nomba sub-accounts API client for internal bookkeeping.
 
-ARCHITECTURAL DECISION - WHY VIRTUAL ACCOUNTS ARE NEVER SCOPED TO THIS SUB-ACCOUNT:
-================================================================================
-
-This sub-account integration is STRICTLY for internal bookkeeping and reporting.
-Virtual accounts are NEVER scoped to this sub-account because of a KNOWN Nomba
-integration failure mode:
-
-1. Virtual accounts scoped to sub-accounts receive real money BUT:
-   - NO webhook delivery occurs for funding events
-   - Balance queries via parent account token return 401 Unauthorized
-   - The funds become effectively invisible to the parent operation
-
-2. All user wallet-funding virtual accounts MUST continue to be created at the
-   PARENT account level - this is the confirmed working path with reliable
-   webhook delivery.
-
-3. This sub-account exists solely as a labeled balance view for treasury
-   reconciliation - comparing our internal ledger_balances sum against what
-   Nomba reports for this treasury bucket.
-
-DO NOT "fix" this by adding sub-account-scoped virtual accounts. This is a
-deliberate architectural decision, not an oversight. If Nomba resolves the
-webhook/visibility issue in the future, verify against live documentation and
-test thoroughly before changing this pattern.
-
-================================================================================
-"""
 from __future__ import annotations
 
 import structlog
@@ -48,7 +20,7 @@ class NombaSubAccountsClient:
     NOT for virtual account creation or money movement.
 
     All requests use PARENT NOMBA_ACCOUNT_ID in the header for authentication.
-    Never use the sub-account's own ID for auth.
+    We never use the sub-account's own ID for auth.
     """
 
     def __init__(self) -> None:
