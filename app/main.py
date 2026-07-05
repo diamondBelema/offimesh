@@ -29,6 +29,7 @@ from app.routers import (
     wallet_router,
     webhooks_router,
 )
+from app.routers.debug import router as debug_router
 
 # Setup logging
 setup_logging()
@@ -147,6 +148,7 @@ app.include_router(wallet_router)
 app.include_router(webhooks_router)
 app.include_router(identity_router)
 app.include_router(notifications_router)
+app.include_router(debug_router)
 
 
 def run() -> None:
