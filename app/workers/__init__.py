@@ -35,6 +35,11 @@ from app.workers.device_trust_recalc_worker import (
     recalculate_device_trust,
     get_trust_score_distribution,
 )
+from app.workers.sub_account_balance_worker import (
+    capture_balance_snapshot,
+    ensure_treasury_sub_account,
+    get_reconciliation_report,
+)
 
 __all__ = [
     "celery_app",
@@ -58,4 +63,7 @@ __all__ = [
     "recalculate_all_trust_scores",
     "recalculate_device_trust",
     "get_trust_score_distribution",
+    "capture_balance_snapshot",
+    "ensure_treasury_sub_account",
+    "get_reconciliation_report",
 ]

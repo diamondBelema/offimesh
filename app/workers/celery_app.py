@@ -59,6 +59,10 @@ celery_app.conf.update(
             "task": "app.workers.device_trust_recalc_worker.recalculate_all_trust_scores",
             "schedule": 86400.0,  # Every 24 hours
         },
+        "capture-sub-account-balance": {
+            "task": "app.workers.sub_account_balance_worker.capture_balance_snapshot",
+            "schedule": 86400.0,  # Every 24 hours (daily)
+        },
         "reconciliation-nightly": {
             "task": "app.workers.reconciliation_worker.run_reconciliation",
             "schedule": 86400.0,  # Every 24 hours
@@ -80,4 +84,5 @@ celery_app.autodiscover_tasks([
     "app.workers.token_cutoff_worker",
     "app.workers.blacklist_worker",
     "app.workers.device_trust_recalc_worker",
+    "app.workers.sub_account_balance_worker",
 ])

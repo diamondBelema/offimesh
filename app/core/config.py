@@ -102,6 +102,24 @@ class Settings(BaseSettings):
     sms_gateway_api_key: str = ""
     sms_gateway_sender_id: str = "OffiMesh"
 
+    # Supabase Configuration (for auth and notifications)
+    supabase_url: str = Field(
+        default="",
+        description="Supabase project URL",
+    )
+    supabase_anon_key: str = Field(
+        default="",
+        description="Supabase anonymous key for client-side operations",
+    )
+    supabase_service_role_key: str = Field(
+        default="",
+        description="Supabase service role key for server-side operations",
+    )
+    supabase_jwt_secret: str = Field(
+        default="",
+        description="Supabase JWT secret for token verification",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""

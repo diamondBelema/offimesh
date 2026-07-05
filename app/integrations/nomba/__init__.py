@@ -15,6 +15,10 @@ from app.integrations.nomba.transactions import (
     NombaTransactionsClient,
     get_nomba_transactions_client,
 )
+from app.integrations.nomba.sub_accounts import (
+    NombaSubAccountsClient,
+    get_nomba_sub_accounts_client,
+)
 from app.integrations.nomba.client import (
     NombaClient,
     get_nomba_client,
@@ -38,6 +42,8 @@ __all__ = [
     "get_nomba_transfers_client",
     "NombaTransactionsClient",
     "get_nomba_transactions_client",
+    "NombaSubAccountsClient",
+    "get_nomba_sub_accounts_client",
     "NombaClient",
     "get_nomba_client",
     # Types

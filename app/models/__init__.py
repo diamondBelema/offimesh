@@ -16,6 +16,8 @@ from app.models.identity_verification import IdentityVerification
 from app.models.fraud_signal import FraudSignal
 from app.models.device_activity_log import DeviceActivityLog
 from app.models.blacklisted_device import BlacklistedDevice
+from app.models.nomba_sub_account import NombaSubAccount, SubAccountBalanceSnapshot
+from app.models.notification import Notification, NotificationPreference
 
 __all__ = [
     "User",
@@ -36,4 +38,8 @@ __all__ = [
     "FraudSignal",
     "DeviceActivityLog",
     "BlacklistedDevice",
+    "NombaSubAccount",
+    "SubAccountBalanceSnapshot",
+    "Notification",
+    "NotificationPreference",
 ]

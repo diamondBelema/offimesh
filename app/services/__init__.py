@@ -9,6 +9,15 @@ from app.services.ledger_service import LedgerService
 from app.services.device_trust_service import DeviceTrustService
 from app.services.identity_verification_service import IdentityVerificationService
 from app.services.fraud_service import FraudService
+from app.services.notification_service import NotificationService
+from app.services.supabase_service import (
+    get_supabase_client,
+    get_supabase_admin_client,
+    verify_supabase_jwt,
+    create_supabase_user,
+    sign_in_with_password,
+    refresh_supabase_session,
+)
 
 __all__ = [
     "AuthService",
@@ -21,4 +30,11 @@ __all__ = [
     "DeviceTrustService",
     "IdentityVerificationService",
     "FraudService",
+    "NotificationService",
+    "get_supabase_client",
+    "get_supabase_admin_client",
+    "verify_supabase_jwt",
+    "create_supabase_user",
+    "sign_in_with_password",
+    "refresh_supabase_session",
 ]

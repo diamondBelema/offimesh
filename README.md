@@ -20,6 +20,55 @@ In many parts of Africa, internet connectivity is unreliable, creating a barrier
 
 ---
 
+## Key Features
+
+### Offline Token Economy with Two-Clock TTL
+
+- **Two-clock TTL system**: Separate customer spend cutoff (48h) and token expiry (72h)
+- **Risk-based limits**: Hardware-backed devices get ₦20,000/72h; software-only get ₦2,000/24h
+- **Atomic spending**: Row-level locking prevents over-spending
+- **Automatic refunds**: Unused balance returned when tokens expire
+
+### Identity Verification (KYC)
+
+- **NIN/BVN verification**: Integration with Nigerian identity systems
+- **Face verification**: Selfie-to-ID-photo matching
+- **Gating**: Users must complete NIN + face verification before provisioning offline tokens
+
+### Fraud Detection at Two Checkpoints
+
+- **Checkpoint 1 (Token Provisioning)**: Fraud score ≥60 blocks token issuance
+- **Checkpoint 2 (Settlement Sync)**: Fraud score ≥60 flags for manual review
+- **Auto-blacklisting**: 3+ signals, 2+ double-spend attempts, or 3+ Play Integrity failures
+
+### Device Trust & Security
+
+- **Google Play Integrity API** verification
+- **Hardware-backed key** detection for elevated trust
+- **Impossible travel detection** using GPS coordinates
+- **Device blacklist middleware** blocks requests from flagged devices
+
+### Double-Entry Ledger
+
+All money movements tracked via immutable double-entry bookkeeping:
+- `ledger_balances`: Current user balances
+- `ledger_entries`: Append-only transaction log
+- Balance integrity verification API
+
+### Nomba Sub-Account Treasury
+
+- Single operational treasury sub-account for internal bookkeeping
+- Daily balance snapshots for reconciliation
+- **IMPORTANT**: Virtual accounts never scoped to sub-account due to known Nomba limitation
+
+### Supabase Integration
+
+- **Authentication**: Email/password via Supabase Auth
+- **Real-time notifications**: Push alerts via Supabase Realtime
+- **JWT verification**: Seamless integration with Supabase tokens
+
+---
+
 ## Architecture
 
 ### High-Level System Architecture
@@ -44,6 +93,7 @@ In many parts of Africa, internet connectivity is unreliable, creating a barrier
 │  ┌────────────────────────────────────────────────────────────────────┐ │
 │  │  FastAPI Application (app/main.py)                                  │ │
 │  │  • Rate Limiting • CORS • Authentication • Request Validation     │ │
+│  │  • Device Blacklist Middleware • Correlation ID Tracking            │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────┘
                                      │
@@ -55,15 +105,23 @@ In many parts of Africa, internet connectivity is unreliable, creating a barrier
 │  │             │ │             │ │ Service    │ │ Service    │       │
 │  │ User mgmt   │ │ Provision   │ │ Sync batch │ │ Nomba API  │       │
 │  │ OTP verify  │ │ Revoke      │ │ Verify sig │ │ Transfer   │       │
-│  │ JWT tokens  │ │ Track usage │ │ Fraud check│ │ Retry logic│       │
+│  │ PIN verify  │ │ Track usage │ │ Fraud check│ │ Retry logic│       │
 │  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘       │
 │         │               │               │               │               │
 │  ┌──────┴──────┐ ┌──────┴──────┐ ┌──────┴──────┐ ┌──────┴──────┐       │
-│  │WalletService│ │WebhookSvc  │ │FraudService │ │AuditService │       │
-│  │             │ │             │ │(Future)    │ │             │       │
-│  │ Virtual Acct│ │ Nomba hook │ │            │ │ Append-only │       │
-│  │ Funding     │ │ Handler    │ │            │ │ Audit log   │       │
-│  │ Balance     │ │ Signature  │ │            │ │             │       │
+│  │WalletService│ │DeviceTrust │ │FraudService│ │Notification│       │
+│  │             │ │ Service    │ │             │ │ Service    │       │
+│  │ Virtual Acct│ │ Play Integ │ │ Checkpoint 1│ │ Real-time  │       │
+│  │ Funding     │ │ Trust score│ │ Checkpoint 2│ │ Supabase   │       │
+│  │ Balance     │ │ Limits     │ │ Auto-block  │ │ push       │       │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘       │
+│         │               │               │               │               │
+│  ┌──────┴──────┐ ┌──────┴──────┐ ┌──────┴──────┐ ┌──────┴──────┐       │
+│  │LedgerService│ │IdentityVer │ │SupabaseSvc │ │AuditService │       │
+│  │             │ │ Service    │ │            │ │             │       │
+│  │ Credit/Debit│ │ NIN/BVN    │ │ Auth       │ │ Append-only │       │
+│  │ Lock/Unlock │ │ Face match │ │ JWT verify │ │ Audit log   │       │
+│  │ Integrity   │ │ Gate tokens│ │ Sessions   │ │             │       │
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘       │
 └─────────────────────────────────────────────────────────────────────────┘
                                      │
@@ -71,21 +129,36 @@ In many parts of Africa, internet connectivity is unreliable, creating a barrier
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         DATA LAYER                                       │
 │  ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐ │
-│  │   PostgreSQL       │  │      Redis         │  │   Nomba API        │ │
+│  │   PostgreSQL       │  │      Redis         │  │   External APIs    │ │
 │  │                    │  │                    │  │                    │ │
-│  │ • Users           │  │ • Nonce tracking  │  │ • Auth token      │ │
-│  │ • Devices         │  │ • Sequence nums   │  │ • Virtual accounts│ │
-│  │ • Offline Tokens  │  │ • Rate limiting   │  │ • Bank transfers  │ │
-│  │ • Transactions    │  │ • Token caching   │  │ • Transactions    │ │
+│  │ • Users           │  │ • Nonce tracking  │  │ • Nomba API       │ │
+│  │ • Devices         │  │ • Sequence nums   │  │ • Supabase        │ │
+│  │ • Offline Tokens  │  │ • Rate limiting   │  │   (Auth, Realtime)│ │
+│  │ • Transactions    │  │ • Token caching   │  │                    │ │
 │  │ • Settlements     │  │ • OTP storage     │  │                    │ │
-│  │ • Virtual Accounts│  │                    │  │                    │ │
-│  │ • Webhook Events  │  │                    │  │                    │ │
+│  │ • Ledger Entries  │  │ • PIN attempts    │  │                    │ │
+│  │ • Fraud Signals   │  │                    │  │                    │ │
+│  │ • Notifications   │  │                    │  │                    │ │
 │  │ • Audit Log       │  │                    │  │                    │ │
 │  └────────────────────┘  └────────────────────┘  └────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Offline Payment Flow
+### Background Workers (Celery Beat)
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| `expire_tokens` | Hourly | Refund unused balance from expired tokens |
+| `apply_spend_cutoffs` | 15 min | Lock spending on tokens past 48h cutoff |
+| `scan_for_blacklist_candidates` | 30 min | Auto-blacklist devices meeting fraud threshold |
+| `capture_balance_snapshot` | Daily | Record Nomba treasury balance for reconciliation |
+| `recalculate_device_trust_scores` | Daily | Update device trust scores from activity |
+| `run_reconciliation` | Daily | Compare Nomba transactions with local ledger |
+| `retry_failed_settlements` | 5 min | Retry pending/failed bank transfers |
+
+---
+
+## Offline Payment Flow
 
 ```
 Customer (Offline)                    Merchant (Offline)
@@ -98,252 +171,59 @@ Customer (Offline)                    Merchant (Offline)
       │  2. QR/BLE Exchange                  │
       │◄─────────────────────────────────────┤
       │     Transaction Request              │
-      │                                      │
       ├─────────────────────────────────────►│
-      │     Signed Transaction               │
+      │     Transaction Payload              │
+      │     • Amount, token_id               │
+      │     • Customer signature             │
       │                                      │
-      │  3. Merchant Verifies               │
-      │     • Check token validity            │
+      │  3. Merchant Verifies                │
       │     • Verify customer signature      │
-      │     • Sign transaction               │
-      │                                      │
-      │◄─────────────────────────────────────┤
-      │     Merchant Signature               │
+      │     • Check token not exhausted     │
+      │     • Create receipt signature      │
       │                                      │
       │  4. Both Store Locally               │
-      │  • Append to hash-chained ledger     │
-      │  • Update token usage                │
+      │     • Append to local sqlite        │
+      │     • Update spent amount            │
       │                                      │
-      ▼                                      ▼
+      └──────────────────────────────────────┘
+                    ...
+             (When Online)
+                    ...
 
-When Online - Batch Sync to Server
-      │                                      │
-      ├─────────────────────────────────────►│
-      │  5. POST /v1/transactions/sync       │
-      │     • Batch of transactions          │
-      │     • Device signature               │
-      │                                      │
-      │  6. Server Processing                │
-      │     • Verify signatures              │
-      │     • Check nonces (replay protect)  │
-      │     • Verify sequence numbers        │
-      │     • Check token status              │
-      │     • Store transactions            │
-      │                                      │
-      ├─── Transaction Status: verified ────►│
-      │                                      │
-      │  7. Settlement (Background Worker)  │
-      │     • Bank account lookup            │
-      │     • Initiate transfer via Nomba   │
-      │     • Update transaction status     │
-      │                                      │
-      ▼                                      ▼
+Backend Server                              Nomba API
+      │                                        │
+      │  5. Transaction Sync                  │
+      │◄───────────────────────────────────────┤
+      │  POST /v1/transactions/sync           │
+      │  • Batch of signed transactions       │
+      │  • Merchant device signature          │
+      │                                        │
+      │  6. Verify & Process                   │
+      │  • Check nonce uniqueness            │
+      │  • Verify all signatures             │
+      │  • Run fraud checkpoint               │
+      │                                        │
+      │  7. Settlement                         │
+      │  ├────────────────────────────────────►│
+      │  │  POST /transfers/bank               │
+      │  │  • Lookup account first             │
+      │  │  • Initiate transfer                │
+      │  │  • Get merchantTxRef                │
+      │  │                                      │
+      │  8. Webhook (async)                    │
+      │◄─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+      │     Transfer completed/failed         │
+      │     • Update settlement status         │
+      │     • Notify user                     │
+      │                                        │
+      └────────────────────────────────────────┘
 ```
 
 ---
 
-## Project Structure
+## Quick Start
 
-```
-app/
-├── core/                    # Application core (no external deps beyond config)
-│   ├── config.py            # Environment settings via Pydantic Settings
-│   ├── database.py          # Async SQLAlchemy engine + sessions
-│   ├── redis.py             # Redis client + helper functions
-│   ├── security.py          # Password hashing, JWT, encryption
-│   ├── logging.py           # Structured logging with structlog
-│   └── exceptions.py        # Centralized exception definitions
-│
-├── models/                  # SQLAlchemy ORM models (one file per table)
-│   ├── user.py              # User model with encrypted phone
-│   ├── device.py            # Device model with attestation
-│   ├── token.py             # Offline token model
-│   ├── transaction.py       # Transaction + TransactionEvent
-│   ├── settlement.py        # Settlement tracking
-│   ├── virtual_account.py   # Wallet funding NUBAN accounts
-│   ├── webhook.py           # Webhook event storage
-│   ├── audit.py             # Append-only audit log
-│   └── idempotency.py       # Idempotency key storage
-│
-├── schemas/                 # Pydantic request/response models
-│   ├── base.py              # Common response envelope
-│   ├── auth.py              # Auth request/response schemas
-│   ├── device.py            # Device schemas
-│   ├── token.py             # Token schemas
-│   ├── transaction.py       # Transaction schemas
-│   ├── settlement.py        # Settlement schemas
-│   ├── wallet.py            # Wallet schemas
-│   ├── webhook.py           # Webhook schemas
-│   └── health.py            # Health check schemas
-│
-├── repositories/           # Data access layer (DB queries only)
-│   ├── user_repository.py
-│   ├── device_repository.py
-│   ├── token_repository.py
-│   ├── transaction_repository.py
-│   ├── settlement_repository.py
-│   ├── virtual_account_repository.py
-│   ├── webhook_repository.py
-│   └── audit_repository.py
-│
-├── services/                # Business logic layer
-│   ├── auth_service.py      # Registration, OTP, JWT
-│   ├── wallet_service.py    # Funding, balance management
-│   ├── token_service.py     # Offline token provisioning
-│   ├── transaction_service.py  # Sync, verification
-│   ├── settlement_service.py   # Nomba settlement
-│   └── webhook_service.py   # Nomba webhook handling
-│
-├── integrations/            # External service clients
-│   └── nomba/
-│       ├── types.py         # Nomba API types
-│       ├── auth.py         # OAuth token caching
-│       ├── virtual_accounts.py  # Wallet funding
-│       ├── transfers.py    # Bank transfers + circuit breaker
-│       ├── transactions.py # Reconciliation queries
-│       └── client.py       # Unified client
-│
-├── workers/                 # Celery background tasks
-│   ├── celery_app.py        # Celery configuration
-│   ├── settlement_worker.py # Settlement processing + retry
-│   ├── webhook_worker.py    # Webhook event processing
-│   └── reconciliation_worker.py  # Nightly reconciliation
-│
-├── routers/                 # FastAPI route definitions
-│   ├── auth.py             # /v1/auth/*
-│   ├── users.py             # /v1/users/*
-│   ├── devices.py           # /v1/devices/*
-│   ├── tokens.py            # /v1/tokens/*
-│   ├── transactions.py      # /v1/transactions/*
-│   ├── settlements.py       # /v1/settlements/*
-│   ├── wallet.py            # /v1/wallet/*
-│   ├── webhooks.py          # /v1/webhooks/nomba
-│   └── health.py            # /health, /v1/health
-│
-├── middleware/              # FastAPI middleware
-│   ├── correlation_id.py    # Request tracing
-│   ├── rate_limit.py        # Rate limiting
-│   └── auth.py             # JWT verification deps
-│
-└── main.py                  # Application entry point
-```
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| **Authentication** |||
-| POST | `/v1/auth/register` | Register new user (sends OTP) |
-| POST | `/v1/auth/verify-otp` | Verify OTP to activate account |
-| POST | `/v1/auth/login` | Request login OTP |
-| POST | `/v1/auth/token` | Exchange OTP for access token |
-| POST | `/v1/auth/refresh` | Refresh access token |
-| POST | `/v1/auth/pin/create` | Set transaction PIN |
-| **Users** |||
-| GET | `/v1/users/me` | Get current user profile |
-| PATCH | `/v1/users/me` | Update profile |
-| GET | `/v1/users/me/balance` | Get wallet balance |
-| GET | `/v1/users/me/limits` | Get transaction limits |
-| **Devices** |||
-| POST | `/v1/devices/register` | Register device with public key |
-| GET | `/v1/devices` | List user's devices |
-| DELETE | `/v1/devices/{id}` | Revoke a device |
-| **Offline Tokens** |||
-| POST | `/v1/tokens/provision` | Provision offline spending token |
-| GET | `/v1/tokens/active` | List active tokens |
-| DELETE | `/v1/tokens/{id}` | Revoke a token |
-| **Transactions** |||
-| POST | `/v1/transactions/sync` | Sync batch of offline transactions |
-| GET | `/v1/transactions` | List user's transactions |
-| GET | `/v1/transactions/{id}` | Get transaction details |
-| **Settlements** |||
-| GET | `/v1/settlements` | List settlements |
-| GET | `/v1/settlements/{tx_id}` | Get settlement status |
-| POST | `/v1/settlements/{tx_id}/process` | Trigger settlement |
-| **Wallet** |||
-| POST | `/v1/wallet/fund` | Create virtual account for funding |
-| GET | `/v1/wallet/fund/{id}` | Check funding status |
-| GET | `/v1/wallet/balance` | Get wallet balance |
-| **Webhooks** |||
-| POST | `/v1/webhooks/nomba` | Nomba webhook endpoint |
-| **Health** |||
-| GET | `/health` | Health check |
-| GET | `/` | API info + docs link |
-
----
-
-## Nomba API Integration
-
-### Authentication
-- OAuth client_credentials grant
-- Token cached in Redis with 55-minute TTL
-- Automatic refresh before expiry
-
-### Virtual Accounts (Wallet Funding)
-- Creates dedicated NUBAN for each user
-- Customer transfers from any Nigerian bank
-- Webhook confirms funding with HMAC verification
-
-### Transfers (Settlements)
-1. Bank account name lookup (mandatory)
-2. Initiate transfer with merchantTxRef as idempotency key
-3. Circuit breaker protects against cascading failures
-4. Retry logic with exponential backoff
-
-### Transactions (Reconciliation)
-- Nightly job pulls transactions from Nomba
-- Diffs against local ledger by merchantTxRef
-- Alerts on any discrepancies (critical safeguard)
-
-### Webhook Events Handled
-| Event | Action |
-|-------|--------|
-| `virtual_account.funded` | Credit user wallet, handle over/under payment |
-| `transfer.success` | Mark transaction as settled |
-| `transfer.failed` | Mark failed, queue for retry |
-
----
-
-## Security Architecture
-
-### Authentication
-- RS256 JWT tokens (not HS256)
-- Short-lived access tokens (15 min)
-- Refresh token rotation
-
-### Phone Number Storage
-- **Never** stored in plaintext
-- Scrypt hash with per-user salt (not SHA-256)
-- Encrypted version for support lookup (AES-256-GCM)
-
-### Transaction Security
-- Ed25519 signatures from both payer and merchant
-- 32-byte random nonces for replay protection
-- Sequence numbers prevent stale transaction attacks
-- PostgreSQL advisory locks prevent concurrent settlement
-
-### Webhook Security
-- HMAC-SHA256 signature verification
-- Constant-time comparison (timing attack prevention)
-- Request ID deduplication before processing
-
-### Rate Limiting
-- Per-IP rate limiting with Redis sliding window
-- Configurable requests/second
-
----
-
-## Getting Started
-
-### Prerequisites
-- Docker + Docker Compose
-- Python 3.12+ (for local development)
-- PostgreSQL 16+ (or use Docker)
-- Redis 7+ (or use Docker)
-
-### Quick Start
+### Docker (Recommended)
 
 ```bash
 # Clone repository
@@ -352,7 +232,7 @@ cd offimesh
 
 # Copy environment template
 cp .env.example .env
-# Edit .env with your Nomba credentials
+# Edit .env with your credentials (Nomba, Supabase, JWT keys)
 
 # Start services with Docker
 docker-compose up -d
@@ -405,6 +285,10 @@ celery -A app.workers.celery_app beat --loglevel=info
 | `NOMBA_CLIENT_ID` | Nomba OAuth client ID | Yes |
 | `NOMBA_CLIENT_SECRET` | Nomba OAuth secret | Yes |
 | `NOMBA_WEBHOOK_SECRET` | Webhook signing secret | Yes |
+| `SUPABASE_URL` | Supabase project URL | For auth/notifications |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key | For auth/notifications |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | For auth/notifications |
+| `SUPABASE_JWT_SECRET` | Supabase JWT secret | For token verification |
 | `ENVIRONMENT` | development/staging/production | No |
 | `DEBUG` | Enable debug mode | No |
 
@@ -414,15 +298,112 @@ celery -A app.workers.celery_app beat --loglevel=info
 
 All monetary values stored as `BIGINT` in **kobo** (1/100 of Naira). Never use float/decimal for money.
 
-Key tables:
-- **users** - Customer/merchant accounts with encrypted phone
-- **devices** - Registered devices with Ed25519 public keys
-- **offline_tokens** - Pre-authorized spending tokens
-- **transactions** - Payment records with Ed25519 signatures
-- **settlements** - Settlement tracking via Nomba
-- **virtual_accounts** - Wallet funding NUBAN accounts
-- **webhook_events** - Idempotent webhook storage
-- **audit_log** - Append-only audit trail
+### Core Tables
+
+| Table | Description |
+|-------|-------------|
+| `users` | Customer/merchant accounts with encrypted phone, NIN/BVN status |
+| `devices` | Registered devices with Ed25519 public keys, trust scores |
+| `offline_tokens` | Pre-authorized spending tokens with two-clock TTL |
+| `transactions` | Payment records with Ed25519 signatures |
+| `settlements` | Settlement tracking via Nomba |
+| `settlement_claims` | Anti-double-spend via UNIQUE settlement_serial |
+| `virtual_accounts` | Wallet funding NUBAN accounts |
+
+### Ledger Tables
+
+| Table | Description |
+|-------|-------------|
+| `ledger_balances` | Current available + locked amounts per user |
+| `ledger_entries` | Append-only credit/debit entries with balance snapshots |
+
+### Fraud & Security Tables
+
+| Table | Description |
+|-------|-------------|
+| `fraud_signals` | Signal type, score, checkpoint, device fingerprint |
+| `blacklisted_devices` | Hash-banned devices with reason |
+| `device_activity_log` | IP, GPS, Play Integrity verdict per action |
+
+### Identity Tables
+
+| Table | Description |
+|-------|-------------|
+| `identity_verifications` | NIN/BVN status, face match score |
+
+### Notification Tables
+
+| Table | Description |
+|-------|-------------|
+| `notifications` | User alerts for transactions, security, etc. |
+| `notification_preferences` | Per-user notification type preferences |
+
+### Treasury Tables
+
+| Table | Description |
+|-------|-------------|
+| `nomba_sub_accounts` | Operational treasury sub-account |
+| `sub_account_balance_snapshots` | Daily balance snapshots for reconciliation |
+
+### System Tables
+
+| Table | Description |
+|-------|-------------|
+| `webhook_events` | Idempotent webhook storage |
+| `audit_log` | Append-only audit trail |
+
+---
+
+## API Endpoints Summary
+
+### Authentication
+- `POST /v1/auth/register` - Register with phone
+- `POST /v1/auth/verify-otp` - Verify OTP
+- `POST /v1/auth/login` - Request login OTP
+- `POST /v1/auth/token` - Exchange OTP for tokens
+- `POST /v1/auth/refresh` - Refresh access token
+- `POST /v1/auth/pin/create` - Create transaction PIN
+- `POST /v1/auth/pin/verify` - Verify PIN (rate-limited 5/15min)
+
+### Supabase Auth
+- `POST /v1/auth/supabase/signup` - Create account with email/password
+- `POST /v1/auth/supabase/signin` - Sign in with email/password
+- `POST /v1/auth/supabase/refresh` - Refresh Supabase session
+- `POST /v1/auth/supabase/verify` - Verify Supabase JWT
+- `POST /v1/auth/supabase/signout` - Sign out
+
+### Identity Verification
+- `POST /v1/users/identity/initiate` - Start NIN/BVN verification
+- `POST /v1/users/identity/face-verify` - Verify face matches ID
+- `GET /v1/users/identity/status` - Get verification status
+- `GET /v1/users/identity/can-provision-token` - Check token eligibility
+
+### Tokens
+- `POST /v1/tokens/provision` - Provision offline spending token
+- `GET /v1/tokens/active` - List active tokens
+- `GET /v1/tokens/{id}/status` - Get token status
+- `POST /v1/tokens/{id}/revoke` - Revoke token
+
+### Transactions
+- `POST /v1/transactions/sync` - Batch sync transactions
+- `GET /v1/transactions` - List user transactions
+- `GET /v1/transactions/{id}` - Get transaction details
+
+### Wallet
+- `GET /v1/wallet/balance` - Get wallet balance
+- `POST /v1/wallet/fund` - Generate virtual account
+- `GET /v1/wallet/funding-status` - Check funding status
+
+### Notifications
+- `GET /v1/notifications` - List notifications
+- `GET /v1/notifications/unread-count` - Get unread count
+- `POST /v1/notifications/{id}/read` - Mark as read
+- `POST /v1/notifications/mark-all-read` - Mark all read
+- `GET /v1/notifications/preferences` - Get preferences
+- `PUT /v1/notifications/preferences` - Update preferences
+
+### Webhooks
+- `POST /v1/webhooks/nomba` - Receive Nomba webhook events
 
 ---
 
@@ -441,6 +422,34 @@ The reconciliation worker runs nightly:
    - Status discrepancies
 
 Any discrepancy triggers alerts for manual review.
+
+---
+
+## Security Measures
+
+1. **Replay Attack Prevention**
+   - Every transaction has unique nonce stored in Redis (SETNX)
+   - Redis + DB unique constraints on nonce
+
+2. **Double-Spend Prevention**
+   - UNIQUE constraint on `settlement_serial`
+   - First DB commit wins, others get conflict error
+   - PostgreSQL advisory locks for concurrent settlement
+
+3. **Device Trust Verification**
+   - Google Play Integrity API verification
+   - Trust score (0-100) based on device history
+   - Low trust = blocked transactions
+
+4. **Fraud Detection**
+   - Two checkpoint system
+   - Auto-blacklisting at threshold
+   - Machine learning signals (future)
+
+5. **Money Integrity**
+   - Double-entry ledger
+   - Balance integrity verification API
+   - Nightly reconciliation
 
 ---
 

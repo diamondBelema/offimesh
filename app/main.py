@@ -20,7 +20,9 @@ from app.routers import (
     devices_router,
     health_router,
     identity_router,
+    notifications_router,
     settlements_router,
+    supabase_auth_router,
     tokens_router,
     transactions_router,
     users_router,
@@ -135,6 +137,7 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(supabase_auth_router)
 app.include_router(users_router)
 app.include_router(devices_router)
 app.include_router(tokens_router)
@@ -143,6 +146,7 @@ app.include_router(settlements_router)
 app.include_router(wallet_router)
 app.include_router(webhooks_router)
 app.include_router(identity_router)
+app.include_router(notifications_router)
 
 
 def run() -> None:
