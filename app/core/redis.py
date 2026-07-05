@@ -156,3 +156,35 @@ async def increment_rate_limit(key: str, window_seconds: int) -> int:
     if current == 1:
         await client.expire(key, window_seconds)
     return current
+
+
+# --- PIN Attempt Tracking (Atomic) ---
+
+
+async def increment_pin_attempts(user_id: str, ttl_seconds: int = 900) -> int:
+    """
+    Atomically increment PIN attempt counter.
+    
+    Returns the new count after increment.
+    """
+    client = await get_redis()
+    key = f"pin_attempts:{user_id}"
+    current = await client.incr(key)
+    if current == 1:
+        await client.expire(key, ttl_seconds)
+    return current
+
+
+async def get_pin_attempts(user_id: str) -> int:
+    """Get current PIN attempt count for user."""
+    client = await get_redis()
+    key = f"pin_attempts:{user_id}"
+    val = await client.get(key)
+    return int(val) if val else 0
+
+
+async def reset_pin_attempts(user_id: str) -> None:
+    """Reset PIN attempt counter on successful verification."""
+    client = await get_redis()
+    key = f"pin_attempts:{user_id}"
+    await client.delete(key)

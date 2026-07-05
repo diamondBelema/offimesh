@@ -79,7 +79,7 @@ class AuthService:
         otp = self._generate_otp()
         await cache_set(f"otp:{user.id}", otp, ttl_seconds=600)
 
-        logger.info("otp_generated", user_id=str(user.id), otp=otp)
+        logger.info("otp_generated", user_id=str(user.id))  # Never log OTP value
 
         # Audit log
         await self.audit_repo.create(AuditLog(
@@ -144,7 +144,7 @@ class AuthService:
         otp = self._generate_otp()
         await cache_set(f"otp:{user.id}", otp, ttl_seconds=600)
 
-        logger.info("login_otp_generated", user_id=str(user.id), otp=otp)
+        logger.info("login_otp_generated", user_id=str(user.id))  # Never log OTP value
 
         await self.audit_repo.create(AuditLog(
             actor_type="user",
@@ -282,14 +282,13 @@ class AuthService:
         Verify transaction PIN.
 
         RATE LIMITED: 5 attempts per 15 minutes.
-        Tracks failed attempts to prevent brute force.
+        Uses atomic Redis operations to prevent race conditions.
         """
-        from app.core.redis import cache_get, cache_set
+        from app.core.redis import get_pin_attempts, increment_pin_attempts, reset_pin_attempts
+        from app.core.security import verify_pin as verify_pin_hash
 
         # Check rate limit (5 attempts per 15 minutes)
-        rate_key = f"pin_attempts:{user_id}"
-        attempts = await cache_get(rate_key)
-        attempt_count = int(attempts) if attempts else 0
+        attempt_count = await get_pin_attempts(user_id)
 
         if attempt_count >= 5:
             raise ValidationError(
@@ -298,12 +297,13 @@ class AuthService:
 
         user = await self.user_repo.get_by_id(uuid.UUID(user_id))
         if not user or not user.pin_hash:
-            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+            # Atomically increment counter even on invalid user (prevents enumeration)
+            await increment_pin_attempts(user_id)
             raise AuthenticationError("PIN not set or user not found")
 
-        if verify_pin(pin, user.pin_hash):
+        if verify_pin_hash(pin, user.pin_hash):
             # Reset attempts on success
-            await cache_set(rate_key, "0", ttl_seconds=900)
+            await reset_pin_attempts(user_id)
 
             await self.audit_repo.create(AuditLog(
                 actor_type="user",
@@ -316,8 +316,8 @@ class AuthService:
 
             return {"verified": True, "remaining_attempts": 5}
         else:
-            # Increment failed attempts
-            await cache_set(rate_key, str(attempt_count + 1), ttl_seconds=900)
+            # Atomically increment failed attempts
+            new_count = await increment_pin_attempts(user_id)
 
             await self.audit_repo.create(AuditLog(
                 actor_type="user",
@@ -325,11 +325,11 @@ class AuthService:
                 action="user.pin_verify_failed",
                 resource="user",
                 resource_id=user_id,
-                metadata={"attempt": attempt_count + 1},
+                metadata={"attempt": new_count},
                 correlation_id=correlation_id,
             ))
 
-            remaining = 5 - (attempt_count + 1)
+            remaining = 5 - new_count
             if remaining <= 0:
                 raise ValidationError(
                     "Too many PIN attempts. Please try again in 15 minutes."

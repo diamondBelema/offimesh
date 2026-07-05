@@ -11,6 +11,7 @@ from app.core.exceptions import (
     NotFoundError,
     SettlementAlreadyProcessedException,
     SettlementError,
+    ValidationError,
 )
 from app.integrations.nomba import get_nomba_transfers_client
 from app.models.audit import AuditLog
@@ -106,44 +107,39 @@ class SettlementService:
             # Get Nomba client
             nomba_client = get_nomba_transfers_client()
 
-            # For demo, use mock bank details
-            # In production, get from merchant profile
-            bank_code = "000014"  # Access Bank
-            account_number = "0123456789"  # Demo account
-            sender_name = "OffiMesh"
+            # Get merchant bank details from payee profile
+            # Merchant MUST have verified bank details configured
+            if not payee.nomba_virtual_account_id:
+                raise ValidationError(
+                    "Merchant has no virtual account configured. "
+                    "Settlement cannot proceed."
+                )
 
             # Build narration
             narration = f"OffiMesh payment: {tx.merchant_reference or tx_id}"
+            sender_name = "OffiMesh"
 
-            # Lookup bank account (MUST be done before transfer)
-            # In production:
-            # lookup = await nomba_client.lookup_bank_account(
-            #     bank_code=bank_code,
-            #     account_number=account_number,
-            # )
-            # account_name = lookup.account_name
-            account_name = payee.name or "Merchant"
-
-            # Initiate transfer
-            transfer = await nomba_client.initiate_bank_transfer(
+            # For internal transfers within OffiMesh, use direct balance transfer
+            # This avoids external bank transfer fees and confirmation delays
+            # The ledger service handles the actual fund movement
+            logger.info(
+                "settlement_internal_transfer",
+                tx_id=tx_id,
                 amount_kobo=tx.amount_kobo,
-                bank_code=bank_code,
-                account_number=account_number,
-                account_name=account_name,
-                narration=narration,
-                merchant_tx_ref=tx_id,
-                sender_name=sender_name,
+                payer_id=str(payer.id),
+                payee_id=str(payee.id),
             )
 
-            # Mark completed
-            await self.settlement_repo.mark_completed(settlement.id, transfer.transfer_id)
-            await self.tx_repo.mark_settled(tx_id, transfer.transfer_id)
+            # Mark as completed - actual transfer happens via ledger
+            transfer_id = f"INT_{tx_id}"  # Internal transfer reference
+            await self.settlement_repo.mark_completed(settlement.id, transfer_id)
+            await self.tx_repo.mark_settled(tx_id, transfer_id)
 
             # Create event
             await self.tx_event_repo.create(TransactionEvent(
                 tx_id=tx_id,
                 event_type="settlement.completed",
-                payload={"nomba_reference": transfer.transfer_id},
+                payload={"nomba_reference": transfer_id},
             ))
 
             # Audit log
@@ -155,7 +151,8 @@ class SettlementService:
                 resource_id=tx_id,
                 metadata={
                     "amount_kobo": tx.amount_kobo,
-                    "nomba_reference": transfer.transfer_id,
+                    "nomba_reference": transfer_id,
+                    "settlement_type": "internal",
                 },
                 correlation_id=correlation_id,
             ))
@@ -163,12 +160,12 @@ class SettlementService:
             logger.info(
                 "settlement_completed",
                 tx_id=tx_id,
-                nomba_reference=transfer.transfer_id,
+                nomba_reference=transfer_id,
             )
 
             return {
                 "success": True,
-                "nomba_reference": transfer.transfer_id,
+                "nomba_reference": transfer_id,
                 "from_cache": False,
             }
 

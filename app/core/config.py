@@ -120,6 +120,12 @@ class Settings(BaseSettings):
         description="Supabase JWT secret for token verification",
     )
 
+    # Encryption Key for sensitive data (Fernet)
+    encryption_key: str = Field(
+        default="",
+        description="32-byte encryption key for Fernet (generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))')",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""

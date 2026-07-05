@@ -19,7 +19,7 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.redis import check_and_store_nonce, get_last_sequence, set_last_sequence
-from app.core.security import verify_payload
+from app.core.security import verify_payload, hash_payload
 from app.models.audit import AuditLog
 from app.models.transaction import Transaction, TransactionEvent
 from app.repositories.audit_repository import AuditRepository
@@ -77,9 +77,12 @@ class TransactionService:
             "batch_id": batch_id,
             "tx_count": len(transactions),
         }
-        # In production, verify signature properly
-        # if not verify_payload(batch_payload, device_signature, device.device_public_key):
-        #     raise SignatureVerificationError("Invalid batch signature")
+        # Verify Ed25519 signature from device
+        if not device.device_public_key:
+            raise SignatureVerificationError("Device public key not registered")
+        
+        if not verify_payload(batch_payload, device_signature, device.device_public_key):
+            raise SignatureVerificationError("Invalid batch signature")
 
         # Process each transaction
         results = []
@@ -198,12 +201,12 @@ class TransactionService:
         if last_seq is not None and tx_data["sequence_number"] <= last_seq:
             return {"tx_id": tx_id, "status": "rejected", "reason": "STALE_SEQUENCE"}
 
-        # Verify signatures (simplified for demo)
-        # In production, properly verify Ed25519 signatures
-        # verify_canonical = self._build_verification_payload(tx_data)
-        # payload_hash = sha256(canonicalize(verify_canonical))
-        # if payload_hash != tx_data["payload_hash"]:
-        #     return {"tx_id": tx_id, "status": "rejected", "reason": "PAYLOAD_HASH_MISMATCH"}
+        # Verify payload hash integrity
+        verify_canonical = self._build_verification_payload(tx_data)
+        computed_hash = hash_payload(verify_canonical)
+        if computed_hash != tx_data["payload_hash"]:
+            logger.warning("payload_hash_mismatch", tx_id=tx_id, expected=tx_data["payload_hash"], computed=computed_hash)
+            return {"tx_id": tx_id, "status": "rejected", "reason": "PAYLOAD_HASH_MISMATCH"}
 
         # All validations passed - create transaction
         try:

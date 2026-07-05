@@ -65,17 +65,25 @@ def verify_phone_hash(phone: str, stored_hash: str, salt: str) -> bool:
 
 
 def _get_encryption_key() -> bytes:
-    """Derive encryption key from JWT secret."""
-    # Use a fixed derivation for simplicity - in production use a separate key
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=b"offimesh_encryption_salt",
-        iterations=100000,
-    )
-    return base64.urlsafe_b64encode(
-        kdf.derive(settings.jwt_private_key.encode()[:32].ljust(32, b"0"))
-    )
+    """
+    Get encryption key from environment variable.
+    
+    SECURITY: Uses a dedicated encryption key, NOT derived from JWT keys.
+    The key must be a URL-safe base64-encoded 32-byte value.
+    """
+    encryption_key = settings.encryption_key
+    if not encryption_key:
+        raise ValueError(
+            "ENCRYPTION_KEY environment variable is required. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+    
+    # Ensure it's properly padded for base64 decoding
+    key_bytes = base64.urlsafe_b64decode(encryption_key)
+    if len(key_bytes) != 32:
+        raise ValueError("ENCRYPTION_KEY must be a 32-byte (256-bit) key")
+    
+    return base64.urlsafe_b64encode(key_bytes)
 
 
 def encrypt_value(plaintext: str) -> str:
@@ -188,6 +196,94 @@ def generate_nonce(length: int = 32) -> str:
 
 
 # --- Signature Verification Helpers ---
+
+
+def verify_payload(payload: dict, signature: str, public_key: str) -> bool:
+    """
+    Verify Ed25519 signature of a payload.
+    
+    Args:
+        payload: Dictionary to verify
+        signature: Base64-encoded Ed25519 signature
+        public_key: Base64-encoded Ed25519 public key
+        
+    Returns:
+        True if signature is valid, False otherwise
+    """
+    import json
+    
+    try:
+        import base64
+        import nacl.signing
+        import nacl.exceptions
+        
+        # Canonicalize payload to JSON with sorted keys
+        canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+        
+        # Decode the signature
+        sig_bytes = base64.b64decode(signature)
+        
+        # Decode the public key
+        key_bytes = base64.b64decode(public_key)
+        
+        # Create verify key from the public key bytes
+        verify_key = nacl.signing.VerifyKey(key_bytes)
+        
+        # Verify the signature
+        verify_key.verify(canonical.encode('utf-8'), sig_bytes)
+        return True
+        
+    except (ValueError, TypeError, nacl.exceptions.CryptoError, Exception):
+        # Invalid signature, key format, or any other error
+        return False
+
+
+def sign_payload(payload: dict, private_key: str) -> str:
+    """
+    Create Ed25519 signature for a payload.
+    
+    Args:
+        payload: Dictionary to sign
+        private_key: Base64-encoded Ed25519 private key
+        
+    Returns:
+        Base64-encoded Ed25519 signature
+    """
+    import json
+    import base64
+    import nacl.signing
+    
+    # Canonicalize payload to JSON with sorted keys
+    canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    
+    # Decode the private key
+    key_bytes = base64.b64decode(private_key)
+    
+    # Create signing key
+    signing_key = nacl.signing.SigningKey(key_bytes)
+    
+    # Sign the canonical payload
+    signed = signing_key.sign(canonical.encode('utf-8'))
+    
+    # Return the signature (without the message)
+    return base64.b64encode(signed.signature).decode('utf-8')
+
+
+def hash_payload(payload: dict) -> str:
+    """
+    Create SHA-256 hash of a canonicalized payload.
+    
+    Args:
+        payload: Dictionary to hash
+        
+    Returns:
+        Hex-encoded SHA-256 hash
+    """
+    import json
+    
+    # Canonicalize payload to JSON with sorted keys
+    canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
 def constant_time_compare(a: str, b: str) -> bool:
