@@ -33,7 +33,11 @@ class NombaSubAccountsClient:
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(
                 base_url=self.base_url,
-                timeout=30.0,
+                timeout=httpx.Timeout(30.0),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                ),
             )
         return self._http_client
 
