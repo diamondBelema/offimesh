@@ -1,8 +1,7 @@
 """SQLAlchemy ORM models for OffiMesh."""
 from app.models.user import User
 from app.models.device import Device
-from app.models.token import OfflineToken
-# from app.models.offline_token import OfflineToken as OfflineTokenV2  # TODO: v2 migration
+from app.models.offline_token import OfflineToken
 from app.models.transaction import Transaction, TransactionEvent
 from app.models.settlement import Settlement
 from app.models.settlement_claim import SettlementClaim
@@ -23,7 +22,6 @@ __all__ = [
     "User",
     "Device",
     "OfflineToken",
-    # "OfflineTokenV2",
     "Transaction",
     "TransactionEvent",
     "Settlement",

@@ -14,7 +14,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.device import Device
-    from app.models.token import OfflineToken
+    from app.models.offline_token import OfflineToken
     from app.models.virtual_account import VirtualAccount
 
 

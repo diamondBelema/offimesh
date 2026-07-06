@@ -33,7 +33,7 @@ async def provision_token(
 
     return ok_response({
         "token_id": token.token_id,
-        "spending_limit_kobo": token.spending_limit_kobo,
+        "amount_kobo": token.amount_kobo,
         "amount_used_kobo": token.amount_used_kobo,
         "remaining_kobo": token.remaining_kobo,
         "status": token.status,
@@ -59,7 +59,7 @@ async def get_active_tokens(
         "tokens": [
             {
                 "token_id": t.token_id,
-                "spending_limit_kobo": t.spending_limit_kobo,
+                "amount_kobo": t.amount_kobo,
                 "remaining_kobo": t.remaining_kobo,
                 "expires_at": t.expires_at.isoformat(),
                 "status": t.status,

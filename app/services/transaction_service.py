@@ -166,7 +166,7 @@ class TransactionService:
             return {"tx_id": tx_id, "status": "rejected", "reason": "TOKEN_EXPIRED"}
 
         # Check spending limit
-        remaining = token.spending_limit_kobo - token.amount_used_kobo
+        remaining = token.amount_kobo - token.amount_used_kobo
         if tx_data["amount_kobo"] > remaining:
             return {"tx_id": tx_id, "status": "rejected", "reason": "INSUFFICIENT_TOKEN_LIMIT"}
 

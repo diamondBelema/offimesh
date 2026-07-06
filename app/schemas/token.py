@@ -32,7 +32,7 @@ class OfflineTokenResponse(BaseSchema):
     """Offline token data response."""
 
     token_id: str
-    spending_limit_kobo: int
+    amount_kobo: int
     amount_used_kobo: int
     remaining_kobo: int
     status: str
@@ -44,7 +44,7 @@ class ActiveTokenResponse(BaseSchema):
     """Active offline token response."""
 
     token_id: str
-    spending_limit_kobo: int
+    amount_kobo: int
     remaining_kobo: int
     expires_at: str
     status: str
