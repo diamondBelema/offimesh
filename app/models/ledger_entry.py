@@ -76,7 +76,7 @@ class LedgerEntry(Base):
         Text,
         nullable=True,
     )
-    metadata: Mapped[dict | None] = mapped_column(
+    entry_metadata: Mapped[dict | None] = mapped_column(
         "metadata",
         JSONB,
         nullable=True,

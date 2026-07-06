@@ -61,7 +61,7 @@ class DeviceActivityLog(Base):
         Integer,
         nullable=True,
     )
-    metadata: Mapped[dict | None] = mapped_column(
+    activity_metadata: Mapped[dict | None] = mapped_column(
         "metadata",
         JSONB,
         nullable=True,
