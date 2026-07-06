@@ -16,6 +16,7 @@ from app.schemas import (
     RegisterRequest,
     TokenResponse,
     VerifyOTPRequest,
+    VerifyPINRequest,
     ok_response,
 )
 from app.services.auth_service import AuthService
