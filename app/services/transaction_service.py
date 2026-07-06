@@ -19,7 +19,7 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.redis import check_and_store_nonce, get_last_sequence, set_last_sequence
-from app.core.security import verify_payload
+
 from app.models.audit import AuditLog
 from app.models.transaction import Transaction, TransactionEvent
 from app.repositories.audit_repository import AuditRepository
