@@ -1,0 +1,15 @@
+[Unit]
+Description=OffiMesh Celery Worker
+After=network.target redis-server.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/offimesh
+EnvironmentFile=/opt/offimesh/.env
+ExecStart=/opt/offimesh/.venv/bin/uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q settlement,webhook,reconciliation
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
