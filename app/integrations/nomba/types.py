@@ -39,7 +39,7 @@ class NombaVirtualAccountResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
 
-    account_id: str = Field(validation_alias="accountId", description="Nomba's internal account ID")
+    account_id: str = Field(default="", validation_alias="accountId", description="Nomba's internal account ID (may be absent in sub-account-scoped creation)")
     account_holder_id: str = Field(default="", validation_alias="accountHolderId", description="Account holder ID (used for webhook registration)")
     account_ref: str = Field(validation_alias="accountRef", description="Our stable reference")
     account_name: str = Field(validation_alias="accountName", description="Account holder name")
