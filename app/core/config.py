@@ -100,11 +100,15 @@ class Settings(BaseSettings):
     # SMS Gateway (for OTP)
     sms_provider: str = Field(
         default="mock",
-        description="SMS provider: 'termii', 'mock' for development",
+        description="SMS provider: 'termii', 'africastalking', or 'mock'",
     )
     sms_gateway_url: str = ""
     sms_gateway_api_key: str = ""
     sms_gateway_sender_id: str = "OffiMesh"
+    sms_gateway_username: str = Field(
+        default="sandbox",
+        description="Username for providers that require it (e.g. Africa's Talking)",
+    )
 
     # Supabase Configuration (for auth and notifications)
     supabase_url: str = Field(

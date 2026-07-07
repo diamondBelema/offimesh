@@ -11,27 +11,48 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class NombaAuthResponse(BaseModel):
-    """Nomba authentication response."""
+    """Nomba authentication response.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    Nomba returns: businessId, access_token, refresh_token, expiresAt
+    We map camelCase to snake_case and ignore extra fields gracefully.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     access_token: str = Field(description="Bearer access token (redacted in logs)")
-    expires_in: int = Field(default=3600, description="Token TTL in seconds")
-    token_type: str = Field(default="Bearer", description="Token type")
+    refresh_token: str = Field(default="", description="Token used to refresh an expired access_token")
+    expires_at: str = Field(default="", validation_alias="expiresAt", description="ISO 8601 expiry timestamp")
+    business_id: str = Field(default="", validation_alias="businessId", description="Nomba account ID")
+
+    @property
+    def expires_in(self) -> int:
+        """Derive seconds-until-expiry from expires_at timestamp."""
+        if not self.expires_at:
+            return 3600
+        try:
+            from datetime import datetime, timezone
+            exp = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+            remaining = int((exp - datetime.now(timezone.utc)).total_seconds())
+            return max(remaining, 60)
+        except Exception:
+            return 3600
 
 
 class NombaVirtualAccountResponse(BaseModel):
-    """Nomba virtual account response."""
+    """Nomba virtual account response.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    Nomba returns camelCase fields. We alias to snake_case and
+    ignore extra fields so the parser doesn't break on spec changes.
+    """
 
-    account_id: str = Field(description="Nomba's internal account ID")
-    account_ref: str = Field(description="Our stable reference")
-    account_name: str = Field(description="Account holder name")
-    account_number: str = Field(description="10-digit NUBAN")
-    bank_name: str = Field(description="Bank name (typically 'Nomba')")
-    bank_code: str = Field(description="Bank code")
-    status: str = Field(description="Account status")
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
+
+    account_id: str = Field(validation_alias="accountId", description="Nomba's internal account ID")
+    account_ref: str = Field(validation_alias="accountRef", description="Our stable reference")
+    account_name: str = Field(validation_alias="accountName", description="Account holder name")
+    account_number: str = Field(validation_alias="bankAccountNumber", description="10-digit NUBAN")
+    bank_name: str = Field(validation_alias="bankName", description="Bank name (typically 'Nombank MFB')")
+    status: str = Field(default="active", validation_alias="status", description="Account status")
 
 
 class NombaBankLookupResponse(BaseModel):

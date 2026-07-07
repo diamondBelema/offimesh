@@ -157,13 +157,12 @@ class NombaAuthClient:
 
             auth_response = NombaAuthResponse.model_validate(auth_data)
 
-            # Cache the token with safe TTL (55 minutes)
-            await cache_nomba_token(auth_response.access_token, auth_response.expires_in)
+            remaining = auth_response.expires_in
+            await cache_nomba_token(auth_response.access_token, remaining)
 
             logger.info(
                 "nomba_auth_success",
-                expires_in=auth_response.expires_in,
-                token_type=auth_response.token_type,
+                expires_in=remaining,
             )
 
             return auth_response.access_token

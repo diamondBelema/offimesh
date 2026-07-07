@@ -60,7 +60,8 @@ class NombaVirtualAccountsClient(NombaResourceClient):
             "accountName": account_name,
         }
         if amount is not None:
-            body["amount"] = amount
+            # Nomba expects expectedAmount in Naira (e.g. 200.00), not kobo
+            body["expectedAmount"] = round(amount / 100, 2)
 
         response = await self._post(
             "/accounts/virtual",

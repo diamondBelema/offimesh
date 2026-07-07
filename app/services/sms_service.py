@@ -24,12 +24,12 @@ class SMSProvider(ABC):
 
 class TermiiSMSProvider(SMSProvider):
     """Termii SMS provider (Nigerian-focused)."""
-    
+
     def __init__(self) -> None:
         self.api_key = settings.sms_gateway_api_key
         self.sender_id = settings.sms_gateway_sender_id
         self.base_url = "https://api.termii.com/api"
-    
+
     async def send(self, phone: str, message: str) -> dict:
         """Send SMS via Termii."""
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -40,8 +40,41 @@ class TermiiSMSProvider(SMSProvider):
                     "message": message,
                     "to": phone,
                     "from": self.sender_id,
-                    "channel": "dnd",  # dnd for transactional
+                    "channel": "dnd",
                     "type": "plain",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
+
+class AfricaTalkingSMSProvider(SMSProvider):
+    """Africa's Talking SMS provider. Popular across Africa, easy API.
+
+    Requires SMS_GATEWAY_API_KEY (your AT apiKey) and
+    SMS_GATEWAY_USERNAME (your AT username, default 'sandbox').
+    Sign up at https://africastalking.com
+    """
+
+    def __init__(self) -> None:
+        self.api_key = settings.sms_gateway_api_key
+        self.username = getattr(settings, "sms_gateway_username", "sandbox")
+        self.base_url = "https://api.africastalking.com/version1/messaging"
+
+    async def send(self, phone: str, message: str) -> dict:
+        """Send SMS via Africa's Talking."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                self.base_url,
+                headers={
+                    "apiKey": self.api_key,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+                data={
+                    "username": self.username,
+                    "to": phone,
+                    "message": message,
                 },
             )
             response.raise_for_status()
@@ -80,15 +113,19 @@ class SMSService:
     def _get_provider(self) -> SMSProvider:
         """Get the configured SMS provider."""
         provider_type = getattr(settings, 'sms_provider', 'mock').lower()
-        
+
         if provider_type == 'termii' and settings.sms_gateway_api_key:
             return TermiiSMSProvider()
-        
-        logger.warning(
-            "sms_provider_fallback",
-            provider=provider_type,
-            reason="No API key configured",
-        )
+
+        if provider_type == 'africastalking' and settings.sms_gateway_api_key:
+            return AfricaTalkingSMSProvider()
+
+        if provider_type == 'termii' or provider_type == 'africastalking':
+            logger.warning(
+                "sms_provider_fallback",
+                provider=provider_type,
+                reason="No SMS_GATEWAY_API_KEY configured",
+            )
         return MockSMSProvider()
     
     async def send_otp(self, phone: str, otp: str) -> dict:
