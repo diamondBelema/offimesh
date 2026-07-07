@@ -137,7 +137,14 @@ class AuthService:
         }
 
     def _generate_otp(self) -> str:
-        """Generate a 6-digit OTP."""
+        """Generate a 6-digit OTP.
+
+        In mock SMS mode (no real SMS provider configured), always return
+        a fixed code so registration/login can be tested end-to-end
+        without needing to read the OTP out of server logs.
+        """
+        if settings.sms_provider == "mock":
+            return "000000"
         return "".join(secrets.choice("0123456789") for _ in range(6))
 
     async def verify_otp(
