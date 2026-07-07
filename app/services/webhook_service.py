@@ -1,6 +1,6 @@
-"""Webhook handling service."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -9,7 +9,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import WebhookSignatureError
+from app.core.exceptions import WebhookDuplicateError, WebhookSignatureError
 from app.core.security import constant_time_compare
 from app.models.audit import AuditLog
 from app.models.webhook import WebhookEvent
@@ -19,6 +19,17 @@ from app.services.settlement_service import SettlementService
 from app.services.wallet_service import WalletService
 
 logger = structlog.get_logger(__name__)
+
+# Nomba's documented event types (data.event_type). These are the ONLY
+# values that will ever actually appear -- the old code checked for
+# "virtual_account.funded" / "transfer.success" / "transfer.failed",
+# none of which exist, so no event ever matched.
+EVENT_PAYMENT_SUCCESS = "payment_success"
+EVENT_PAYOUT_SUCCESS = "payout_success"
+EVENT_PAYMENT_FAILED = "payment_failed"
+EVENT_PAYMENT_REVERSAL = "payment_reversal"
+EVENT_PAYOUT_FAILED = "payout_failed"
+EVENT_PAYOUT_REFUND = "payout_refund"
 
 
 class WebhookService:
@@ -31,61 +42,109 @@ class WebhookService:
         self.wallet_service = WalletService(db)
         self.settlement_service = SettlementService(db)
 
-    def verify_signature(self, raw_body: bytes, signature: str) -> bool:
+    def _build_signing_string(self, body: dict, timestamp: str) -> str:
         """
-        Verify webhook signature using HMAC-SHA256.
+        Build the exact string Nomba signs, per their documented scheme.
 
-        Uses constant-time comparison to prevent timing attacks.
+        Format: event_type:requestId:userId:walletId:transactionId:type:time:responseCode:timestamp
+
+        This is NOT a hash of the raw body -- it's a colon-joined string
+        of specific fields pulled from the PARSED payload, plus the
+        nomba-timestamp header value appended at the end.
         """
-        expected = hmac.new(
+        data = body.get("data", {})
+        merchant = data.get("merchant", {}) or {}
+        transaction = data.get("transaction", {}) or {}
+
+        event_type = body.get("event_type", "")
+        request_id = body.get("requestId", "")
+        user_id = merchant.get("userId", "")
+        wallet_id = merchant.get("walletId", "")
+        transaction_id = transaction.get("transactionId", "")
+        transaction_type = transaction.get("type", "")
+        time_ = transaction.get("time", "")
+        response_code = transaction.get("responseCode", "")
+
+        # Nomba's own sample code normalizes the literal string "null" to "".
+        if response_code == "null" or response_code is None:
+            response_code = ""
+
+        return (
+            f"{event_type}:{request_id}:{user_id}:{wallet_id}:"
+            f"{transaction_id}:{transaction_type}:{time_}:{response_code}:{timestamp}"
+        )
+
+    def verify_signature(self, body: dict, signature: str, timestamp: str) -> bool:
+        """
+        Verify webhook signature using HMAC-SHA256 + base64, over the
+        field-concatenation string Nomba actually signs -- NOT a hash
+        of the raw request body.
+
+        Uses constant-time comparison to prevent timing attacks. Nomba's
+        own reference implementations compare case-insensitively, so we
+        lowercase both sides before the constant-time compare to match
+        their behavior exactly (both sides are still fixed-length
+        base64 strings, so this doesn't introduce a length side-channel).
+        """
+        if not settings.nomba_webhook_secret:
+            logger.error("webhook_secret_not_configured")
+            return False
+
+        signing_string = self._build_signing_string(body, timestamp)
+
+        digest = hmac.new(
             settings.nomba_webhook_secret.encode(),
-            raw_body,
+            signing_string.encode(),
             hashlib.sha256,
-        ).hexdigest()
+        ).digest()
+        expected = base64.b64encode(digest).decode()
 
-        return constant_time_compare(expected, signature)
+        return constant_time_compare(expected.lower(), (signature or "").lower())
 
     async def handle_webhook(
         self,
         raw_body: bytes,
         signature: str,
+        timestamp: str = "",
         correlation_id: str | None = None,
     ) -> WebhookEvent:
         """
         Handle incoming Nomba webhook.
 
-        1. Verify signature
-        2. Parse body
-        3. Check for duplicate (idempotency)
-        4. Store event
-        5. Return 200 (actual processing is async)
+        1. Parse body (required first -- Nomba's signature is computed
+           over parsed fields, not raw bytes, so we can't verify before
+           parsing).
+        2. Verify signature using the parsed fields + timestamp header.
+        3. Check requestId for idempotency -- raises WebhookDuplicateError
+           if already seen, so the router can ack without reprocessing.
+        4. Store event.
         """
-        # Verify signature
-        signature_valid = self.verify_signature(raw_body, signature)
-        if not signature_valid:
-            logger.warning("webhook_signature_invalid")
-            raise WebhookSignatureError()
-
-        # Parse body
+        # Parse body first -- required to build the signing string.
         try:
             body = json.loads(raw_body)
         except json.JSONDecodeError as e:
             logger.error("webhook_parse_error", error=str(e))
-            raise ValueError("Invalid JSON body")
+            raise ValueError("Invalid JSON body") from e
 
-        # Extract fields
+        # Verify signature using parsed fields + timestamp header.
+        if not self.verify_signature(body, signature, timestamp):
+            logger.warning("webhook_signature_invalid")
+            raise WebhookSignatureError()
+
+        # Real field name is "event_type", not "event".
         request_id = body.get("requestId") or body.get("request_id", "")
-        event_type = body.get("event", "")
+        event_type = body.get("event_type", "")
         data = body.get("data", {})
 
         if not request_id:
-            raise ValueError("Missing request_id")
+            raise ValueError("Missing requestId")
 
-        # Check for duplicate
+        # Check for duplicate -- raise so the router can distinguish
+        # "already handled, just ack" from a fresh event.
         existing = await self.webhook_repo.get_by_request_id(request_id)
         if existing:
             logger.info("webhook_duplicate", request_id=request_id)
-            return existing
+            raise WebhookDuplicateError(request_id=request_id)
 
         # Store event
         event = WebhookEvent(
@@ -122,14 +181,41 @@ class WebhookService:
         Process a webhook event asynchronously.
 
         Called by Celery worker after handler returns 200.
+
+        Dispatches on Nomba's real event_type values. For
+        payment_success specifically, transaction.aliasAccountType
+        distinguishes a virtual-account funding event ("VIRTUAL") from
+        other payment types (POS/card/etc.) that also fire
+        payment_success but aren't wallet top-ups.
         """
         try:
-            if event.event_type == "virtual_account.funded":
-                await self._handle_virtual_account_funded(event)
-            elif event.event_type == "transfer.success":
+            data = event.payload or {}
+            transaction = data.get("transaction", {}) or {}
+
+            if event.event_type == EVENT_PAYMENT_SUCCESS:
+                if transaction.get("aliasAccountType") == "VIRTUAL":
+                    await self._handle_virtual_account_funded(event)
+                else:
+                    logger.info(
+                        "payment_success_non_virtual_ignored",
+                        event_id=str(event.id),
+                        transaction_type=transaction.get("type"),
+                    )
+            elif event.event_type == EVENT_PAYOUT_SUCCESS:
                 await self._handle_transfer_success(event)
-            elif event.event_type == "transfer.failed":
+            elif event.event_type in (EVENT_PAYMENT_FAILED, EVENT_PAYOUT_FAILED):
                 await self._handle_transfer_failed(event)
+            elif event.event_type in (EVENT_PAYMENT_REVERSAL, EVENT_PAYOUT_REFUND):
+                # Not previously handled at all. At minimum, log loudly
+                # so a reversed/refunded transaction doesn't vanish
+                # silently -- wire this to settlement_service once its
+                # refund-handling method is confirmed.
+                logger.warning(
+                    "webhook_reversal_or_refund_needs_handling",
+                    event_id=str(event.id),
+                    event_type=event.event_type,
+                    transaction_id=transaction.get("transactionId"),
+                )
             else:
                 logger.info("webhook_event_ignored", event_type=event.event_type)
 
@@ -145,36 +231,56 @@ class WebhookService:
             raise
 
     async def _handle_virtual_account_funded(self, event: WebhookEvent) -> None:
-        """Handle wallet funding event."""
+        """
+        Handle a payment_success event where aliasAccountType == "VIRTUAL"
+        -- i.e. a customer funded one of our virtual accounts (NUBAN).
+
+        Real payload shape (data.transaction / data.merchant), not the
+        flat accountId/accountRef/amountReceived keys the previous
+        version assumed:
+
+          data.merchant.userId, data.merchant.walletId
+          data.transaction.aliasAccountReference  -- THIS is our accountRef,
+              the correlation key per hackathon org guidance
+          data.transaction.transactionAmount      -- in NAIRA, not kobo
+          data.transaction.transactionId
+        """
         data = event.payload
+        merchant = data.get("merchant", {}) or {}
+        transaction = data.get("transaction", {}) or {}
 
-        account_id = data.get("accountId")
-        account_ref = data.get("accountRef")
-        amount_received = data.get("amountReceived") or data.get("amount_received")
-        tx_ref = data.get("transactionReference") or data.get("transaction_reference")
+        account_ref = transaction.get("aliasAccountReference")
+        amount_naira = transaction.get("transactionAmount")
+        transaction_id = transaction.get("transactionId")
 
-        if not account_id or amount_received is None:
+        if not account_ref or amount_naira is None:
             logger.warning("incomplete_funding_event", data=data)
             return
 
+        amount_received_kobo = int(round(float(amount_naira) * 100))
+
+        # NOTE: renamed from nomba_account_id -> account_ref since the
+        # correlation key here is genuinely the accountRef we assigned
+        # at virtual account creation, not any Nomba-internal account id.
+        # If wallet_service.process_funding's signature still expects
+        # nomba_account_id specifically, this call needs to be reconciled
+        # against that file -- flagging rather than guessing further.
         result = await self.wallet_service.process_funding(
-            nomba_account_id=account_id,
-            amount_received_kobo=amount_received,
-            transaction_reference=tx_ref or "",
+            account_ref=account_ref,
+            amount_received_kobo=amount_received_kobo,
+            transaction_reference=transaction_id or "",
             correlation_id=event.request_id,
         )
 
-        logger.info("funding_processed", result=result)
+        logger.info("funding_processed", result=result, account_ref=account_ref)
 
     async def _handle_transfer_success(self, event: WebhookEvent) -> None:
-        """Handle successful settlement transfer."""
+        """Handle a payout_success event (outbound transfer completed)."""
         data = event.payload
+        transaction = data.get("transaction", {}) or {}
 
-        transfer_id = data.get("transferId") or data.get("transfer_id")
-        merchant_tx_ref = data.get("merchantTxRef") or data.get("merchant_tx_ref")
-        amount = data.get("amount")
-        status = data.get("status")
-        completed_at = data.get("completedAt") or data.get("completed_at")
+        transfer_id = transaction.get("transactionId")
+        merchant_tx_ref = transaction.get("merchantTxRef")
 
         if not merchant_tx_ref:
             logger.warning("missing_merchant_ref", data=data)
@@ -187,13 +293,15 @@ class WebhookService:
         )
 
     async def _handle_transfer_failed(self, event: WebhookEvent) -> None:
-        """Handle failed settlement transfer."""
+        """Handle a payment_failed / payout_failed event."""
         data = event.payload
+        transaction = data.get("transaction", {}) or {}
 
-        transfer_id = data.get("transferId") or data.get("transfer_id")
-        merchant_tx_ref = data.get("merchantTxRef") or data.get("merchant_tx_ref")
-        error_code = data.get("errorCode") or data.get("error_code")
-        error_message = data.get("errorMessage") or data.get("error_message")
+        transfer_id = transaction.get("transactionId")
+        merchant_tx_ref = transaction.get("merchantTxRef")
+        # Real field is responseCodeMessage, not errorMessage/errorCode.
+        error_message = transaction.get("responseCodeMessage")
+        error_code = transaction.get("responseCode")
 
         if not merchant_tx_ref:
             logger.warning("missing_merchant_ref", data=data)
