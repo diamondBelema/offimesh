@@ -47,20 +47,39 @@ class TermiiSMSProvider(SMSProvider):
 
 
 class AfricaTalkingSMSProvider(SMSProvider):
-    """Africa's Talking SMS provider. Popular across Africa, easy API.
+    """Africa's Talking SMS provider.
 
     Requires SMS_GATEWAY_API_KEY (your AT apiKey) and
     SMS_GATEWAY_USERNAME (your AT username, default 'sandbox').
-    Sign up at https://africastalking.com
+
+    Uses nomba_environment to pick the right domain:
+      - sandbox    -> api.sandbox.africastalking.com
+      - production -> api.africastalking.com
+
+    After sending, checks per-recipient delivery status — AT returns
+    HTTP 201 even when individual numbers fail.
     """
 
     def __init__(self) -> None:
         self.api_key = settings.sms_gateway_api_key
         self.username = getattr(settings, "sms_gateway_username", "sandbox")
-        self.base_url = "https://api.africastalking.com/version1/messaging"
+        is_sandbox = settings.nomba_environment == "sandbox"
+        self.base_url = (
+            "https://api.sandbox.africastalking.com/version1/messaging"
+            if is_sandbox
+            else "https://api.africastalking.com/version1/messaging"
+        )
 
     async def send(self, phone: str, message: str) -> dict:
-        """Send SMS via Africa's Talking."""
+        """Send SMS via Africa's Talking.
+
+        Returns the parsed response body on success.
+
+        Raises:
+            httpx.HTTPError: HTTP-level failure.
+            Exception: Delivery rejected per-recipient (wrong number,
+                       blacklisted, insufficient balance, etc).
+        """
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 self.base_url,
@@ -76,7 +95,11 @@ class AfricaTalkingSMSProvider(SMSProvider):
                 },
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            recipients = data.get("SMSMessageData", {}).get("Recipients", [])
+            if recipients and recipients[0].get("status") != "Success":
+                raise Exception(f"AT delivery failed: {recipients}")
+            return data
 
 
 class MockSMSProvider(SMSProvider):
