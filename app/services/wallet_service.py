@@ -63,11 +63,10 @@ class WalletService:
             status="active",
             is_primary=True,
         )
-        await self.virtual_account_repo.create(virtual_account)
-
-        await self.user_repo.set_nomba_account(user.id, nomba_account.account_id)
-
-        await self.audit_repo.create(AuditLog(
+        async with self.db.begin()
+            await self.virtual_account_repo.create(virtual_account)
+            await self.user_repo.set_nomba_account(user.id, nomba_account.account_id)
+            await self.audit_repo.create(AuditLog(
             actor_type="user",
             actor_id=user_id,
             action="wallet.virtual_account_created",
