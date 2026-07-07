@@ -14,6 +14,13 @@ PARENT hackathon account id (settings.nomba_account_id). Our team's
 sub-account id (settings.nomba_subaccount_id) is passed as a PATH
 parameter on endpoints that support it. These are two different
 values used in two different places -- do not conflate them.
+
+BASE URL: all paths here include an explicit /v1 prefix, matching
+Nomba's real endpoints (e.g. GET https://api.nomba.com/v1/accounts/
+virtual/{accountRef}, confirmed from their reference docs). This only
+resolves correctly if settings.nomba_base_url is bare, e.g.
+"https://api.nomba.com" (prod) / "https://sandbox.nomba.com" (sandbox)
+-- with NO "/v1" suffix on the base URL itself.
 """
 from __future__ import annotations
 
@@ -26,10 +33,11 @@ from app.integrations.nomba.types import NombaVirtualAccountResponse
 logger = structlog.get_logger(__name__)
 
 # Nomba enforces these bounds server-side (CreateVirtualAccountRequest
-# schema). Failing fast locally avoids a round trip for a guaranteed 400.
-_ACCOUNT_REF_MIN_LEN = 8
+# schema, confirmed against the OpenAPI spec). Failing fast locally
+# avoids a round trip for a guaranteed 400.
+_ACCOUNT_REF_MIN_LEN = 16
 _ACCOUNT_REF_MAX_LEN = 64
-_ACCOUNT_NAME_MIN_LEN = 4
+_ACCOUNT_NAME_MIN_LEN = 8
 _ACCOUNT_NAME_MAX_LEN = 64
 
 
@@ -85,11 +93,8 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         """
         Create a virtual account for wallet funding, scoped to our sub-account.
 
-        POST /accounts/virtual/{subAccountId}
+        POST /v1/accounts/virtual/{subAccountId}
         Body: accountRef, accountName, expectedAmount (optional)
-
-        Returns a dedicated NUBAN that the customer can transfer to.
-        Funds sent to it settle into our team sub-account.
 
         Args:
             account_ref: Our stable reference, 16-64 chars.
@@ -111,7 +116,7 @@ class NombaVirtualAccountsClient(NombaResourceClient):
             body["expectedAmount"] = round(amount / 100, 2)
 
         response = await self._post(
-            f"/accounts/virtual/{self.sub_account_id}",
+            f"/v1/accounts/virtual/{self.sub_account_id}",
             body,
             is_idempotent=True,
             request_id=request_id,
@@ -138,18 +143,10 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         """
         Fetch a virtual account by its accountRef or NUBAN.
 
-        GET /accounts/virtual/{identifier}
-
-        Args:
-            identifier: The accountRef used at creation, or the
-                10-digit bank account number (NUBAN).
-            request_id: Optional request ID for tracing
-
-        Returns:
-            NombaVirtualAccountResponse with account details
+        GET /v1/accounts/virtual/{identifier}
         """
         response = await self._get(
-            f"/accounts/virtual/{identifier}",
+            f"/v1/accounts/virtual/{identifier}",
             request_id=request_id,
         )
 
@@ -169,18 +166,7 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         Update a virtual account's reference, name, callback URL, or
         expected amount.
 
-        PUT /accounts/virtual/{identifier}
-
-        Args:
-            identifier: The accountRef or NUBAN of the account to update.
-            new_account_ref: New accountRef to assign.
-            account_name: New display name.
-            callback_url: New callback URL.
-            expected_amount: New expected amount in kobo.
-            request_id: Optional request ID for tracing
-
-        Returns:
-            True if Nomba confirmed the update.
+        PUT /v1/accounts/virtual/{identifier}
         """
         body: dict[str, object] = {}
         if new_account_ref is not None:
@@ -190,10 +176,11 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         if callback_url is not None:
             body["callbackUrl"] = callback_url
         if expected_amount is not None:
-            body["expectedAmount"] = str(round(expected_amount / 100, 2))
+            # Sent as a number, matching create's expectedAmount convention.
+            body["expectedAmount"] = round(expected_amount / 100, 2)
 
         response = await self._put(
-            f"/accounts/virtual/{identifier}",
+            f"/v1/accounts/virtual/{identifier}",
             body,
             request_id=request_id,
         )
@@ -219,17 +206,10 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         """
         Expire (deactivate) a virtual account.
 
-        DELETE /accounts/virtual/{identifier}
-
-        Args:
-            identifier: The accountRef of the account to expire.
-            request_id: Optional request ID for tracing
-
-        Returns:
-            True if Nomba confirmed the account is now expired.
+        DELETE /v1/accounts/virtual/{identifier}
         """
         response = await self._delete(
-            f"/accounts/virtual/{identifier}",
+            f"/v1/accounts/virtual/{identifier}",
             request_id=request_id,
         )
 
@@ -260,20 +240,7 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         """
         Filter/list virtual accounts under our sub-account.
 
-        POST /accounts/virtual/list
-
-        Args:
-            limit: Page size.
-            cursor: Pagination cursor from a previous call.
-            account_name: Filter by account holder name.
-            account_ref: Filter by our reference.
-            bank_account_number: Filter by NUBAN.
-            expired: Filter by expiry state.
-            resource_acquired: Filter by whether the account is in use.
-            request_id: Optional request ID for tracing
-
-        Returns:
-            Tuple of (results, next_cursor).
+        POST /v1/accounts/virtual/list
         """
         params = {k: v for k, v in {"limit": limit, "cursor": cursor}.items() if v is not None}
         body = {
@@ -289,7 +256,7 @@ class NombaVirtualAccountsClient(NombaResourceClient):
         }
 
         response = await self._post(
-            "/accounts/virtual/list",
+            "/v1/accounts/virtual/list",
             body,
             params=params,
             request_id=request_id,
@@ -314,3 +281,4 @@ def get_nomba_virtual_accounts_client() -> NombaVirtualAccountsClient:
     if _nomba_virtual_accounts_client is None:
         _nomba_virtual_accounts_client = NombaVirtualAccountsClient()
     return _nomba_virtual_accounts_client
+            
