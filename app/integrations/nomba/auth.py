@@ -1,8 +1,8 @@
 """Nomba authentication client with Redis caching.
 
 Handles OAuth client_credentials flow for obtaining and refreshing
-access tokens. Tokens are cached in Redis with a 55-minute TTL
-to ensure refresh before the 1-hour expiry.
+access tokens. Tokens are cached in Redis with a 25-minute TTL
+(30-min Nomba expiry minus 5-min safety margin).
 
 Note: This client does NOT inherit from BaseNombaClient because
 authentication requests use different headers (no Bearer token yet).
@@ -25,9 +25,9 @@ class NombaAuthClient:
     """
     Nomba authentication client with token caching.
 
-    Tokens are cached in Redis with 55-minute TTL to ensure
-    refresh before expiry. All other Nomba clients depend on
-    this for their Bearer token.
+    Tokens are cached in Redis with 25-minute TTL to ensure
+    refresh well before the 30-minute Nomba expiry. All other
+    Nomba clients depend on this for their Bearer token.
 
     This client maintains its own HTTP client because auth requests
     don't include Bearer tokens and have different requirements.
@@ -79,7 +79,7 @@ class NombaAuthClient:
         """
         Get a valid access token, using cached token if available.
 
-        The token is cached for 55 minutes (safe margin from 1-hour expiry).
+        The token is cached for 25 minutes (safe margin from 30-minute expiry).
         Returns the access token string.
 
         Returns:

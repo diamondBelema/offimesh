@@ -1,17 +1,11 @@
 """Nomba transfers API client for bank transfers and settlements.
-
-Refactored to inherit from NombaResourceClient, providing:
-- Bank account lookup (required before transfer)
-- Bank transfer initiation
-- Transfer status queries
-- Production-grade error handling and retries
 """
 from __future__ import annotations
 
 import structlog
 
 from app.integrations.nomba.base_client import NombaResourceClient
-from app.integrations.nomba.types import NombaTransferResponse, NombaBankLookupResponse
+from app.integrations.nomba.types import NombaBankLookupResponse, NombaTransferResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -23,7 +17,9 @@ class NombaTransfersClient(NombaResourceClient):
     Used for settlements - transferring funds to merchant bank accounts.
 
     IMPORTANT: Always call lookup_bank_account() before initiate_bank_transfer()
-    to verify the account details. This is mandatory per Nomba's documentation.
+    to verify the account details.
+
+    Rate limit: 1 transfer per second per business.
     """
 
     async def lookup_bank_account(
@@ -36,7 +32,7 @@ class NombaTransfersClient(NombaResourceClient):
         """
         Resolve bank account to account name BEFORE transfer.
 
-        POST /transfers/bank/lookup
+        POST /v1/transfers/bank/lookup
         Body: bankCode, accountNumber
 
         This is MANDATORY before initiating any transfer.
@@ -47,7 +43,7 @@ class NombaTransfersClient(NombaResourceClient):
             request_id: Optional request ID for tracing
 
         Returns:
-            NombaBankLookupResponse with account_name, bank_name, etc.
+            NombaBankLookupResponse with account_name and account_number
 
         Raises:
             NombaNotFoundError: If account cannot be resolved
@@ -59,9 +55,9 @@ class NombaTransfersClient(NombaResourceClient):
         }
 
         response = await self._post(
-            "/transfers/bank/lookup",
+            "/v1/transfers/bank/lookup",
             body,
-            is_idempotent=True,  # Lookup is safe to retry
+            is_idempotent=True,
             request_id=request_id,
         )
 
@@ -91,20 +87,24 @@ class NombaTransfersClient(NombaResourceClient):
         """
         Initiate a bank transfer for settlement.
 
-        POST /transfers/bank
-        Body: amount, bankCode, accountNumber, accountName, senderName, narration, merchantTxRef
+        POST /v2/transfers/bank
+        Body: amount (Naira string), bankCode, accountNumber, accountName,
+              senderName, narration, merchantTxRef
 
         The merchantTxRef is used as a unique idempotency key. If the same
         reference is used again, Nomba will return the original transfer.
 
+        NOTE: Nomba amounts are in Naira (not kobo). The amount_kobo input
+        is divided by 100 to convert from kobo to Naira.
+
         Args:
-            amount_kobo: Amount in kobo (1/100 of Naira)
+            amount_kobo: Amount in kobo (divided by 100 before sending)
             bank_code: Nigerian bank code
             account_number: 10-digit NUBAN
             account_name: Verified account name from lookup
             narration: Transfer description
             merchant_tx_ref: Unique reference (our tx_id)
-            sender_name: Name shown to recipient
+            sender_name: Name shown to recipient (default "OffiMesh")
             request_id: Optional request ID for tracing
 
         Returns:
@@ -115,8 +115,10 @@ class NombaTransfersClient(NombaResourceClient):
             NombaConflictError: If duplicate reference
             NombaTransferError: If transfer fails
         """
+        amount_naira = round(amount_kobo / 100, 2)
+
         body = {
-            "amount": amount_kobo,
+            "amount": str(amount_naira),
             "bankCode": bank_code,
             "accountNumber": account_number,
             "accountName": account_name,
@@ -126,9 +128,9 @@ class NombaTransfersClient(NombaResourceClient):
         }
 
         response = await self._post(
-            "/transfers/bank",
+            "/v2/transfers/bank",
             body,
-            is_idempotent=True,  # merchantTxRef provides idempotency
+            is_idempotent=True,
             request_id=request_id,
         )
 
@@ -138,8 +140,9 @@ class NombaTransfersClient(NombaResourceClient):
             "nomba_transfer_initiated",
             request_id=request_id,
             merchant_tx_ref=merchant_tx_ref,
-            amount_kobo=amount_kobo,
+            amount_naira=amount_naira,
             transfer_id=result.transfer_id,
+            status=result.status,
         )
 
         return result
@@ -149,50 +152,61 @@ class NombaTransfersClient(NombaResourceClient):
         merchant_tx_ref: str,
         *,
         request_id: str | None = None,
-    ) -> NombaTransferResponse:
+    ) -> NombaTransferResponse | None:
         """
-        Check the status of a transfer using our reference.
+        Check the status of a transfer using our merchant reference.
 
-        GET /transfers/{merchantTxRef}
+        Uses the transaction lookup endpoint since Nomba does not expose
+        a dedicated transfer status endpoint.
+
+        GET /v1/transactions/accounts/single?merchantTxRef={merchantTxRef}
 
         Args:
-            merchant_tx_ref: Our unique reference used in initiate
+            merchant_tx_ref: Our unique reference used in initiate_bank_transfer
             request_id: Optional request ID for tracing
 
         Returns:
-            NombaTransferResponse with current status
+            NombaTransferResponse with current status, or None if not found
         """
-        response = await self._get(
-            f"/transfers/{merchant_tx_ref}",
-            request_id=request_id,
-        )
-
-        return self._parse_response(response, NombaTransferResponse)
+        try:
+            response = await self._get(
+                "/v1/transactions/accounts/single",
+                params={"merchantTxRef": merchant_tx_ref},
+                request_id=request_id,
+            )
+            return self._parse_response(response, NombaTransferResponse)
+        except Exception:
+            return None
 
     async def get_transfer_by_id(
         self,
         transfer_id: str,
         *,
         request_id: str | None = None,
-    ) -> NombaTransferResponse:
+    ) -> NombaTransferResponse | None:
         """
-        Get transfer by Nomba's transfer ID.
+        Get transfer by Nomba's transfer/transaction ID.
 
-        GET /transfers/id/{transferId}
+        Uses the transaction lookup endpoint.
+
+        GET /v1/transactions/accounts/single?transactionRef={transferId}
 
         Args:
             transfer_id: Nomba's transfer ID from initiate_bank_transfer
             request_id: Optional request ID for tracing
 
         Returns:
-            NombaTransferResponse with transfer details
+            NombaTransferResponse with transfer details, or None if not found
         """
-        response = await self._get(
-            f"/transfers/id/{transfer_id}",
-            request_id=request_id,
-        )
-
-        return self._parse_response(response, NombaTransferResponse)
+        try:
+            response = await self._get(
+                "/v1/transactions/accounts/single",
+                params={"transactionRef": transfer_id},
+                request_id=request_id,
+            )
+            return self._parse_response(response, NombaTransferResponse)
+        except Exception:
+            return None
 
 
 # Singleton instance

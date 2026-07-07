@@ -1,8 +1,6 @@
 """Nomba API types and data models.
 
-All responses are strictly typed using Pydantic models with
-extra="forbid" to catch unexpected fields and strict=True
-for precise type validation.
+All responses use extra="ignore" to tolerate undocumented response fields.
 """
 from __future__ import annotations
 
@@ -13,7 +11,6 @@ class NombaAuthResponse(BaseModel):
     """Nomba authentication response.
 
     Nomba returns: businessId, access_token, refresh_token, expiresAt
-    We map camelCase to snake_case and ignore extra fields gracefully.
     """
 
     model_config = ConfigDict(extra="ignore", strict=False)
@@ -38,11 +35,7 @@ class NombaAuthResponse(BaseModel):
 
 
 class NombaVirtualAccountResponse(BaseModel):
-    """Nomba virtual account response.
-
-    Nomba returns camelCase fields. We alias to snake_case and
-    ignore extra fields so the parser doesn't break on spec changes.
-    """
+    """Nomba virtual account response."""
 
     model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
 
@@ -56,51 +49,65 @@ class NombaVirtualAccountResponse(BaseModel):
 
 
 class NombaBankLookupResponse(BaseModel):
-    """Bank account lookup response."""
+    """Bank account name lookup response.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    Nomba returns: accountNumber, accountName (camelCase).
+    """
 
-    account_name: str = Field(description="Verified account holder name")
-    account_number: str = Field(description="10-digit NUBAN")
-    bank_code: str = Field(description="Bank code used for lookup")
-    bank_name: str = Field(description="Bank name")
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
 
-
-# Alias for backwards compatibility
-NombiTransferLookupResponse = NombaBankLookupResponse
+    account_name: str = Field(validation_alias="accountName", description="Verified account holder name")
+    account_number: str = Field(validation_alias="accountNumber", description="10-digit NUBAN")
 
 
 class NombaTransferResponse(BaseModel):
-    """Nomba transfer response."""
+    """Nomba transfer response.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    Parses both BankAccountTransferResult (POST /v2/transfers/bank)
+    and TransactionResult (GET /v1/transactions/accounts/single).
+    """
 
-    transfer_id: str = Field(description="Nomba's transfer ID")
-    reference: str = Field(description="Our merchantTxRef")
-    status: str = Field(description="Transfer status (pending, success, failed)")
-    amount: int = Field(description="Transfer amount in kobo")
-    fee: int = Field(default=0, description="Transfer fee in kobo")
-    created_at: str = Field(description="ISO timestamp")
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
+
+    transfer_id: str = Field(validation_alias="id", description="Nomba's transfer/transaction ID")
+    reference: str = Field(default="", validation_alias="merchantTxRef", description="Our merchant transaction reference")
+    status: str = Field(default="", description="Transfer status")
+    amount: float = Field(default=0.0, description="Transfer amount in Naira")
+    fee: float = Field(default=0.0, description="Transfer fee in Naira")
+    created_at: str = Field(default="", validation_alias="timeCreated", description="ISO timestamp")
 
     @field_validator("status")
     @classmethod
-    def validate_status(cls, v: str) -> str:
+    def normalize_status(cls, v: str) -> str:
         """Normalize status to lowercase."""
         return v.lower()
 
 
 class NombaTransactionResponse(BaseModel):
-    """Nomba transaction response."""
+    """Nomba transaction response.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    Maps from TransactionResult returned by Nomba's transaction endpoints.
+    """
 
-    transaction_id: str = Field(description="Nomba's transaction ID")
-    reference: str = Field(description="Transaction reference")
-    type: str = Field(description="Transaction type")
-    status: str = Field(description="Transaction status")
-    amount: int = Field(description="Amount in kobo")
-    currency: str = Field(default="NGN", description="Currency code")
-    created_at: str = Field(description="ISO timestamp")
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
+
+    transaction_id: str = Field(validation_alias="id", description="Nomba's transaction ID")
+    reference: str = Field(default="", validation_alias="merchantTxRef", description="Merchant transaction reference")
+    type: str = Field(default="", description="Transaction type")
+    status: str = Field(default="", description="Transaction status")
+    amount: float = Field(default=0.0, description="Transaction amount")
+    gateway_message: str = Field(default="", validation_alias="gatewayMessage", description="Gateway message")
+    source: str = Field(default="", description="Transaction source (api, pos, web, etc.)")
+    created_at: str = Field(default="", validation_alias="timeCreated", description="ISO timestamp")
+
+
+class NombaTransactionListResponse(BaseModel):
+    """Nomba transaction list response (cursor-based pagination)."""
+
+    model_config = ConfigDict(extra="ignore", strict=False)
+
+    results: list[NombaTransactionResponse] = Field(default_factory=list, description="Transaction results")
+    cursor: str | None = Field(default=None, description="Pagination cursor for next page")
 
 
 class NombaWebhookEvent(BaseModel):
@@ -117,33 +124,26 @@ class NombaWebhookEvent(BaseModel):
 class NombaSubAccountResponse(BaseModel):
     """Nomba sub-account response."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
 
-    account_id: str = Field(description="Nomba's sub-account ID")
-    account_ref: str = Field(description="Our stable reference")
-    account_name: str = Field(description="Sub-account name")
-    parent_account_id: str | None = Field(default=None, description="Parent account ID")
-    status: str = Field(default="active", description="Sub-account status")
-    created_at: str | None = Field(default=None, description="Creation timestamp")
+    account_id: str = Field(validation_alias="accountId", description="Nomba's sub-account ID")
+    account_ref: str = Field(default="", validation_alias="accountRef", description="Our stable reference")
+    account_name: str = Field(validation_alias="accountName", description="Sub-account name")
+    parent_account_id: str | None = Field(default=None, validation_alias="parentAccountId", description="Parent account ID")
+    status: str = Field(default="active", validation_alias="status", description="Sub-account status")
+    created_at: str | None = Field(default=None, validation_alias="timeCreated", description="Creation timestamp")
+
+
+# Backwards compatibility alias
+NombiTransferLookupResponse = NombaBankLookupResponse
 
 
 class NombaBalanceResponse(BaseModel):
     """Nomba balance response."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=False, populate_by_name=True)
 
-    balance: int = Field(default=0, description="Balance in kobo")
+    balance: float = Field(default=0.0, description="Balance")
     currency: str = Field(default="NGN", description="Currency code")
-    available_balance: int | None = Field(default=None, description="Available balance in kobo")
-    ledger_balance: int | None = Field(default=None, description="Ledger balance in kobo")
-
-
-class NombaTransactionListResponse(BaseModel):
-    """Nomba transaction list response."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    transactions: list[NombaTransactionResponse] = Field(default_factory=list)
-    total: int | None = Field(default=None, description="Total count")
-    page: int | None = Field(default=None, description="Current page")
-    page_size: int | None = Field(default=None, description="Page size")
+    available_balance: float | None = Field(default=None, validation_alias="availableBalance", description="Available balance")
+    ledger_balance: float | None = Field(default=None, validation_alias="ledgerBalance", description="Ledger balance")

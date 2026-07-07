@@ -44,7 +44,7 @@ def run_reconciliation(self, days_back: int = 1) -> dict:
 
             # Get Nomba transactions
             nomba_client = get_nomba_transactions_client()
-            nomba_txs, total = await nomba_client.list_transactions(
+            nomba_txs, _ = await nomba_client.list_transactions(
                 date_from=start_date,
                 date_to=end_date,
             )

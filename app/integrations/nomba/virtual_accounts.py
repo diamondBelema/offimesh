@@ -27,9 +27,9 @@ logger = structlog.get_logger(__name__)
 
 # Nomba enforces these bounds server-side (CreateVirtualAccountRequest
 # schema). Failing fast locally avoids a round trip for a guaranteed 400.
-_ACCOUNT_REF_MIN_LEN = 16
+_ACCOUNT_REF_MIN_LEN = 8
 _ACCOUNT_REF_MAX_LEN = 64
-_ACCOUNT_NAME_MIN_LEN = 8
+_ACCOUNT_NAME_MIN_LEN = 4
 _ACCOUNT_NAME_MAX_LEN = 64
 
 
