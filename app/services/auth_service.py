@@ -106,7 +106,8 @@ class AuthService:
                 "account_name": virtual_account.account_name,
             }
         except Exception as e:
-            logger.error("virtual_account_creation_failed", user_id=str(user.id), error=str(e))
+            logger.exception("virtual_account_creation_failed", user_id=str(user.id), error=str(e))
+            raise
 
         otp = self._generate_otp()
         await cache_set(f"otp:{user.id}", otp, ttl_seconds=600)
