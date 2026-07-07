@@ -101,9 +101,12 @@ class NombaAuthClient:
         """
         Fetch a new access token from Nomba and cache it.
 
-        POST /auth/token/issue
+        POST /v1/auth/token/issue
         Headers: Content-Type, accountId
         Body: grant_type, client_id, client_secret
+
+        Confirmed against Nomba's own reference example:
+        POST https://api.nomba.com/v1/auth/token/issue
 
         Returns:
             str: The access token
@@ -132,7 +135,7 @@ class NombaAuthClient:
             )
 
             response = await client.post(
-                "/auth/token/issue",
+                "/v1/auth/token/issue",
                 headers=headers,
                 json=body,
             )
@@ -200,3 +203,4 @@ class NombaAuthClient:
 def get_nomba_auth_client() -> NombaAuthClient:
     """Get the Nomba auth client singleton."""
     return NombaAuthClient()
+        
