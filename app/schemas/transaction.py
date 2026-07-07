@@ -1,7 +1,6 @@
 """Transaction Pydantic schemas."""
 from __future__ import annotations
 
-from datetime import datetime
 
 from pydantic import Field, field_validator
 

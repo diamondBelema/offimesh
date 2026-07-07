@@ -1,11 +1,9 @@
 """Webhook processing Celery worker."""
 from __future__ import annotations
 
-import structlog
 
 from app.core.database import get_session_context
 from app.core.logging import get_logger
-from app.models.webhook import WebhookEvent
 from app.repositories.webhook_repository import WebhookRepository
 from app.services.webhook_service import WebhookService
 from app.workers.celery_app import celery_app

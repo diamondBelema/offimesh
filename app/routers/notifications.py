@@ -1,13 +1,12 @@
 """Notification API routes."""
 from __future__ import annotations
 
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.middleware.auth import CurrentUser, get_current_user
+from app.middleware.auth import CurrentUser
 from app.middleware.correlation_id import get_correlation_id
 from app.schemas.base import BaseSchema, ok_response
 from app.services.notification_service import NotificationService

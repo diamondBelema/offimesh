@@ -1,7 +1,6 @@
 """Settlement processing service."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 import structlog
@@ -15,7 +14,7 @@ from app.core.exceptions import (
 from app.integrations.nomba import get_nomba_transfers_client
 from app.models.audit import AuditLog
 from app.models.settlement import Settlement
-from app.models.transaction import Transaction, TransactionEvent
+from app.models.transaction import TransactionEvent
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.settlement_repository import SettlementRepository
 from app.repositories.transaction_repository import (

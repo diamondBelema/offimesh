@@ -1,8 +1,6 @@
 """Transaction sync and processing service."""
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from datetime import datetime, timezone
 
@@ -12,11 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import (
     BatchLimitExceededError,
-    ConflictError,
     NotFoundError,
-    ReplayAttackError,
-    SignatureVerificationError,
-    ValidationError,
 )
 from app.core.redis import check_and_store_nonce, get_last_sequence, set_last_sequence
 

@@ -1,10 +1,9 @@
 """Token cutoff worker for locking spending on tokens past their cutoff time."""
 from __future__ import annotations
 
-import structlog
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.core.database import get_session_context
 from app.core.logging import get_logger

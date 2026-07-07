@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
 
 import redis.asyncio as redis
 from redis.asyncio import Redis

@@ -1,7 +1,6 @@
 """Sub-account balance snapshot worker for treasury reconciliation."""
 from __future__ import annotations
 
-import structlog
 from datetime import datetime, timezone
 
 from sqlalchemy import select, func

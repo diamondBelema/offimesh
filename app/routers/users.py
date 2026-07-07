@@ -1,7 +1,6 @@
 """User-related API routes."""
 from __future__ import annotations
 
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel

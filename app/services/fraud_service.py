@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any
 
 import structlog
 from sqlalchemy import select, func
@@ -11,9 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLog
 from app.models.blacklisted_device import BlacklistedDevice
-from app.models.device import Device
 from app.models.fraud_signal import FraudSignal
-from app.models.user import User
 from app.repositories.audit_repository import AuditRepository
 
 logger = structlog.get_logger(__name__)

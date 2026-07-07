@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.exceptions import AuthenticationError, InvalidTokenError
+from app.core.exceptions import InvalidTokenError
 from app.core.security import decode_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository

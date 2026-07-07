@@ -10,7 +10,6 @@ import ulid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.exceptions import (
     NotFoundError,
     TokenExhaustedError,
@@ -21,9 +20,7 @@ from app.core.exceptions import (
 )
 from app.core.security import generate_nonce
 from app.models.audit import AuditLog
-from app.models.device import Device
 from app.models.offline_token import OfflineToken
-from app.models.user import User
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.device_repository import DeviceRepository
 from app.repositories.user_repository import UserRepository

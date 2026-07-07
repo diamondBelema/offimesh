@@ -7,8 +7,7 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import NotFoundError
 from app.integrations.nomba import get_nomba_virtual_accounts_client
 from app.models.audit import AuditLog
 from app.models.virtual_account import VirtualAccount

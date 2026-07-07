@@ -1,16 +1,14 @@
 """Token expiry worker for refunding unused offline token balance."""
 from __future__ import annotations
 
-import structlog
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.core.database import get_session_context
 from app.core.logging import get_logger
 from app.models.audit import AuditLog
 from app.models.offline_token import OfflineToken
-from app.models.ledger_balance import LedgerBalance
 from app.repositories.audit_repository import AuditRepository
 from app.services.ledger_service import LedgerService
 from app.workers.celery_app import celery_app

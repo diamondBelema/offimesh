@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -11,7 +10,7 @@ from typing import Any
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from jose import JWTError, jwe, jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings

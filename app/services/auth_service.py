@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +19,9 @@ from app.core.redis import cache_get, cache_set
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decrypt_value,
     encrypt_value,
     hash_phone,
     hash_pin,
-    verify_phone_hash,
-    verify_pin,
 )
 from app.models.audit import AuditLog
 from app.models.device import Device

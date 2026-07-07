@@ -1,7 +1,6 @@
 """Blacklist worker for auto-blacklisting devices with fraud signals."""
 from __future__ import annotations
 
-import structlog
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select, func
@@ -10,10 +9,8 @@ from app.core.database import get_session_context
 from app.core.logging import get_logger
 from app.models.audit import AuditLog
 from app.models.blacklisted_device import BlacklistedDevice
-from app.models.device import Device
 from app.models.fraud_signal import FraudSignal
 from app.repositories.audit_repository import AuditRepository
-from app.services.device_trust_service import DeviceTrustService
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)

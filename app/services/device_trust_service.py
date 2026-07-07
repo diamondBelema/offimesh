@@ -2,15 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 from datetime import datetime, timezone
-from typing import Any
 
 import structlog
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.audit import AuditLog
 from app.models.blacklisted_device import BlacklistedDevice
 from app.models.device import Device

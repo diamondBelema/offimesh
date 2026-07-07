@@ -1,7 +1,6 @@
 """Settlement processing Celery worker."""
 from __future__ import annotations
 
-import structlog
 
 from app.core.database import get_session_context
 from app.core.logging import get_logger

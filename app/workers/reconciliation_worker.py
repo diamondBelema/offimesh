@@ -1,9 +1,8 @@
 """Reconciliation Celery worker for nightly diff checks."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
-import structlog
 
 from app.core.database import get_session_context
 from app.core.logging import get_logger

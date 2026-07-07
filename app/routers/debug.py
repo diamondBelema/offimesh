@@ -40,7 +40,7 @@ async def verify_webhook_routing(
         # Check if we can get account info
         try:
             account_info = await nomba_client.get_virtual_account(test_ref)
-            account_holder_id = account_info.get("accountHolderId")
+            account_holder_id = account_info.account_holder_id or None
             
             if not account_holder_id:
                 return {
@@ -90,12 +90,10 @@ async def verify_webhook_routing(
                 message = "Webhook routing verified successfully"
             else:
                 webhook_configured = False
-                status = "error"
                 message = f"Webhook returned status {response.status_code}"
                 
         except httpx.HTTPError as e:
             webhook_configured = False
-            status = "error"
             message = f"Could not verify webhook routing: {str(e)}"
         
         if not webhook_configured:

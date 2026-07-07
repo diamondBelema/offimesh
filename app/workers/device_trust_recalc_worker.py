@@ -1,7 +1,6 @@
 """Device trust recalculation worker for periodic trust score updates."""
 from __future__ import annotations
 
-import structlog
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select

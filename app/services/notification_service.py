@@ -9,9 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification, NotificationPreference
-from app.models.user import User
 from app.repositories.audit_repository import AuditRepository
-from app.models.audit import AuditLog
 
 logger = structlog.get_logger(__name__)
 

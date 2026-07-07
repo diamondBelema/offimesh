@@ -14,7 +14,6 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.core.security import encrypt_value
 from app.models.audit import AuditLog
 from app.models.identity_verification import IdentityVerification
-from app.models.user import User
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.user_repository import UserRepository
 

@@ -523,13 +523,17 @@ class NombaResourceClient(BaseNombaClient):
     async def _post(
         self,
         path: str,
-        body: dict[str, Any],
+        body: dict[str, Any] | None = None,
         *,
+        params: dict[str, Any] | None = None,
         is_idempotent: bool = False,
         request_id: str | None = None,
     ) -> httpx.Response:
         """Execute a POST request."""
-        return await self._request("POST", path, body=body, is_idempotent=is_idempotent, request_id=request_id)
+        return await self._request(
+            "POST", path, body=body, params=params,
+            is_idempotent=is_idempotent, request_id=request_id,
+        )
 
     async def _put(
         self,

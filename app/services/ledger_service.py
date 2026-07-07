@@ -5,12 +5,10 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import InsufficientFundsError, ValidationError
-from app.models.audit import AuditLog
 from app.models.ledger_balance import LedgerBalance
 from app.models.ledger_entry import EntryType, ReferenceType
 from app.models.ledger_entry import LedgerEntry as LedgerEntryModel

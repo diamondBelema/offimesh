@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 from app.core.config import settings
-from app.schemas import ok_response
 
 router = APIRouter(tags=["Health"])
 
