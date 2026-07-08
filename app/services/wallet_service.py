@@ -63,16 +63,16 @@ class WalletService:
             status="active",
             is_primary=True,
         )
-        async with self.db.begin()
+        async with self.db.begin():
             await self.virtual_account_repo.create(virtual_account)
             await self.user_repo.set_nomba_account(user.id, nomba_account.account_id)
             await self.audit_repo.create(AuditLog(
-            actor_type="user",
-            actor_id=user_id,
-            action="wallet.virtual_account_created",
-            resource="virtual_account",
-            resource_id=str(virtual_account.id),
-            correlation_id=correlation_id,
+                actor_type="user",
+                actor_id=user_id,
+                action="wallet.virtual_account_created",
+                resource="virtual_account",
+                resource_id=str(virtual_account.id),
+                correlation_id=correlation_id,
         ))
 
         logger.info(
@@ -122,19 +122,16 @@ class WalletService:
             status="pending",
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
-        await self.virtual_account_repo.create(virtual_account)
-
-        # Link to user
-        await self.user_repo.set_nomba_account(user.id, nomba_account.account_id)
-
-        # Audit log
-        await self.audit_repo.create(AuditLog(
-            actor_type="user",
-            actor_id=user_id,
-            action="wallet.funding_account_created",
-            resource="virtual_account",
-            resource_id=str(virtual_account.id),
-            correlation_id=correlation_id,
+        async with self.db.begin():
+            await self.virtual_account_repo.create(virtual_account)
+            await self.user_repo.set_nomba_account(user.id, nomba_account.account_i
+            await self.audit_repo.create(AuditLog(
+                actor_type="user",
+                actor_id=user_id,
+                action="wallet.funding_account_created",
+                resource="virtual_account",
+                resource_id=str(virtual_account.id),
+                correlation_id=correlation_id,
         ))
 
         logger.info(
