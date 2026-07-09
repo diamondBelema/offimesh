@@ -55,11 +55,12 @@ All money movements tracked via immutable double-entry bookkeeping:
 - `ledger_entries`: Append-only transaction log
 - Balance integrity verification API
 
-### Nomba Sub-Account Treasury
+### Nomba Virtual Accounts & Sub-Account Treasury
 
-- Single operational treasury sub-account for internal bookkeeping
-- Daily balance snapshots for reconciliation
-- **IMPORTANT**: Virtual accounts never scoped to sub-account due to known Nomba limitation
+- Every user's wallet-funding virtual account (NUBAN) is created **under our team's sub-account** (`POST /v1/accounts/virtual/{subAccountId}`), per Nomba hackathon organizer guidance — this is what makes inbound funds settle into our sub-account and webhooks route correctly.
+- The `accountId` header on every Nomba API call (including auth) is always the shared **parent** hackathon account ID. Our sub-account ID is passed separately, as a path parameter, on the endpoints that support it. These are two different values used in two different places — never conflate them.
+- Single operational treasury sub-account, provisioned by the organizers (dashboard-only — there is no API to create or list sub-accounts).
+- Daily balance snapshots for reconciliation via `GET /v1/accounts/{subAccountId}/balance`.
 
 ### Supabase Integration
 
@@ -205,7 +206,7 @@ Backend Server                              Nomba API
       │                                        │
       │  7. Settlement                         │
       │  ├────────────────────────────────────►│
-      │  │  POST /transfers/bank               │
+      │  │  POST /v2/transfers/bank            │
       │  │  • Lookup account first             │
       │  │  • Initiate transfer                │
       │  │  • Get merchantTxRef                │
@@ -281,7 +282,10 @@ celery -A app.workers.celery_app beat --loglevel=info
 | `CELERY_BROKER_URL` | Redis URL for Celery | Yes |
 | `JWT_PRIVATE_KEY` | RS256 private key (PEM format) | Yes |
 | `JWT_PUBLIC_KEY` | RS256 public key (PEM format) | Yes |
-| `NOMBA_ACCOUNT_ID` | Nomba parent account ID | Yes |
+| `NOMBA_ENVIRONMENT` | `sandbox` or `production` | Yes |
+| `NOMBA_BASE_URL` | Bare Nomba API host, e.g. `https://api.nomba.com` (prod) or `https://sandbox.nomba.com` (sandbox) — **no version suffix**; every client call adds its own `/v1` or `/v2` prefix | Yes |
+| `NOMBA_ACCOUNT_ID` | Nomba **parent** account ID — used in the `accountId` header on every request | Yes |
+| `NOMBA_SUBACCOUNT_ID` | Our team's sub-account ID (organizer-provisioned) — used as a path parameter, never in the header | Yes |
 | `NOMBA_CLIENT_ID` | Nomba OAuth client ID | Yes |
 | `NOMBA_CLIENT_SECRET` | Nomba OAuth secret | Yes |
 | `NOMBA_WEBHOOK_SECRET` | Webhook signing secret | Yes |
@@ -297,6 +301,8 @@ celery -A app.workers.celery_app beat --loglevel=info
 ## Database Schema
 
 All monetary values stored as `BIGINT` in **kobo** (1/100 of Naira). Never use float/decimal for money.
+
+> **Note:** Nomba's own API is inconsistent about units across endpoints (e.g. virtual account `expectedAmount` is a Naira decimal, while some transaction fields' units haven't been confirmed against a real sandbox transaction). Convert explicitly at the Nomba client boundary — never assume a Nomba-returned `amount` field is already in kobo.
 
 ### Core Tables
 
@@ -412,7 +418,7 @@ All monetary values stored as `BIGINT` in **kobo** (1/100 of Naira). Never use f
 **Critical safeguard against silent money loss.**
 
 The reconciliation worker runs nightly:
-1. Pulls all transactions from Nomba API for the day
+1. Pulls all transactions from Nomba API for the day (`POST /v1/transactions/accounts` — this is a filter/list endpoint, not a plain `GET`)
 2. Builds lookup map by `merchantTxRef` (our tx_id)
 3. Compares against local transactions table
 4. Reports:
@@ -453,25 +459,24 @@ Any discrepancy triggers alerts for manual review.
 
 ---
 
-## Contributing
+## Known Limitations
 
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Run linting: `ruff check app/`
-5. Run type checking: `mypy app/`
-6. Submit a pull request
+- **Retry-on-failure gap**: `BaseNombaClient`'s circuit breaker and exponential backoff currently only trigger on network-level failures (timeouts, connection errors). HTTP-level failures from Nomba (429 rate limit, 500-504 server errors) raise immediately without retrying, despite `RetryConfig.retryable_status_codes` being defined for exactly this case. Worth fixing before relying on this for production resilience.
 
----
+- **Amount units on transaction reads**:
+  Nomba's transaction/transfer response fields haven't been confirmed as kobo vs Naira against a real sandbox transaction. Verify with a known-amount test before trusting reconciliation math built on these fields.
 
-## License
+**Contributing**
+- Fork the repository
+- Create a feature branch
+- Make changes with tests
+- Run linting: ruff check app/
+- Run type checking: mypy app/
+- Submit a pull request
 
+**License**
 MIT License - See LICENSE file for details.
 
----
-
-## Author
-
+**Author**
 Built by Diamond Belema and David Briggs for the Dev career nomba hackathon.
-
 OffiMesh - Extending digital payments to the offline world.
